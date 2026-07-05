@@ -1,0 +1,929 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAMURAI DUEL — проект Пети</title>
+<style>
+  html,body{margin:0;padding:0;background:#0d0e18;color:#cfd2e8;
+    font-family:"Courier New",monospace;height:100%;}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;}
+  canvas{width:min(100%,960px);image-rendering:pixelated;image-rendering:crisp-edges;
+    border:3px solid #2a2c44;border-radius:6px;background:#000;}
+  .hint{font-size:13px;opacity:.7;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="game" width="960" height="540"></canvas>
+  <div class="hint">Кликни по полю, затем Enter. ←→/AD — шаг · Z/J — удар ногой · X/K — подножка · C/L — сюрикен</div>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   SAMURAI DUEL v0.1 — проект Пети
+   Один файл: спрайты, движок, бой, ИИ, HUD.
+   ============================================================ */
+
+/* ---------- НАСТРОЙКИ (Петя, менять тут!) ------------------- */
+const P1_NAME = "ПЕТЯ";        // имя игрока
+const P2_NAME = "СЁГУН-БОТ";   // имя ИИ
+const HP_MAX  = 100;
+const WINS_NEEDED = 2;         // раундов до победы в матче
+const DMG = { kick: 10, sweep: 8, shuriken: 6 };
+const AI_REACTION = 14;        // тиков между «мыслями» ИИ (меньше = сложнее)
+const AI_AGGRO    = 0.55;      // агрессивность ИИ 0..1
+
+/* ---------- КОНСТАНТЫ ЭКРАНА -------------------------------- */
+const W = 960, H = 540;
+const GROUND = 470;            // линия пола (y ступней)
+const S = 4;                   // масштаб пикселя спрайта
+const STEP = 1000 / 60;        // фиксированный шаг: 60 тиков/с
+
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+/* ============================================================
+   СПРАЙТЫ — пиксельные сетки.
+   Каждая буква = цвет из палитры, точка = прозрачно.
+   Сетка 32 колонки x 30 строк, короткие строки добиваются точками.
+   Якорь тела: колонка 12, ступни: нижняя строка. «Перед» — вправо.
+   Петя: можно рисовать прямо буквами! o=контур h=волосы w=повязка
+   s=кожа d=тень кожи a=броня b=тёмная броня c=светлая броня
+   g=пояс p=штаны k=обувь/сталь тёмная m=металл
+   ============================================================ */
+const GW = 32, GH = 30, ANCHOR_X = 12;
+
+const RAW = {
+idle: [
+"..........ohho",
+".........ohhhho",
+"........ohhhhhho",
+"........ohhhhhho",
+".....ww.owwwwwwo",
+"........ohssssso",
+"........ohshshso",
+"........ohssssdo",
+".........osssso",
+"...........oso",
+"......occaaaaaacco",
+"......ocbaaaaaabco",
+"......obbaaaaaabbo",
+"......obaaaaaaasso",
+"......obbbaaaaabbo",
+"....ggogggggggggggo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+"......opppo...opppo",
+"......opppo...opppo",
+"......opppo...opppo",
+"......okkko...okkko",
+"......okkko...okkko",
+".......okko....okko",
+".....ookkko..ookkkoo",
+".....oooooo..ooooooo",
+],
+walk1: [
+"..........ohho",
+".........ohhhho",
+"........ohhhhhho",
+"........ohhhhhho",
+".....ww.owwwwwwo",
+"........ohssssso",
+"........ohshshso",
+"........ohssssdo",
+".........osssso",
+"...........oso",
+"......occaaaaaacco",
+"......ocbaaaaaabco",
+"......obbaaaaaabbo",
+"......obaaaaaaasso",
+"......obbbaaaaabbo",
+"....ggogggggggggggo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+"....opppo.....opppo",
+"....opppo.....opppo",
+"....opppo.....opppo",
+"....okkko.....okkko",
+"....okkko.....okkko",
+".....okko......okko",
+"...ookkko....ookkkoo",
+"...oooooo....ooooooo",
+],
+walk2: [
+"..........ohho",
+".........ohhhho",
+"........ohhhhhho",
+"........ohhhhhho",
+".....ww.owwwwwwo",
+"........ohssssso",
+"........ohshshso",
+"........ohssssdo",
+".........osssso",
+"...........oso",
+"......occaaaaaacco",
+"......ocbaaaaaabco",
+"......obbaaaaaabbo",
+"......obaaaaaaasso",
+"......obbbaaaaabbo",
+"....ggogggggggggggo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".......oppo..oppo",
+".......oppo..oppo",
+".......oppo..oppo",
+".......okko..okko",
+".......okko..okko",
+".......okko...okko",
+"......ookkoo.ookkoo",
+"......oooooo.oooooo",
+],
+kickA: [
+".........ohho",
+"........ohhhho",
+".......ohhhhhho",
+".......ohhhhhho",
+"....ww.owwwwwwo",
+".......ohssssso",
+".......ohshshso",
+".......ohssssdo",
+"........osssso",
+"..........oso",
+".....occaaaaaacco",
+".....ocbaaaaaabco",
+".....obbaaaaaabbo",
+".....obaaaaaaasso",
+".....obbbaaaaabbo",
+"...ggogggggggggggo",
+"....opppppppo",
+"....opppppppo.oppppo",
+"....oppppppo..oppppo",
+".....oppppo...oppppo",
+".....opppo.....okkko",
+"......oppo.....okko",
+"......oppo.....okko",
+"......oppo....ookkoo",
+"......okko",
+"......okko",
+"......okko",
+".......okko",
+".....ookkkoo",
+".....ooooooo",
+],
+kickB: [
+"........ohho",
+".......ohhhho",
+"......ohhhhhho",
+"......ohhhhhho",
+"...ww.owwwwwwo",
+"......ohssssso",
+"......ohshshso",
+"......ohssssdo",
+".......osssso",
+".........oso",
+"....occaaaaaacco",
+"....ocbaaaaaabco",
+"..ssobbaaaaaabbo",
+"..s.obaaaaaaabbo",
+"....obbbaaaaabbo",
+"..ggogggggggggggo",
+"....oppppppopppppppkkkkkkoo",
+"....oppppppopppppppkkkkkkoo",
+"....oppppppopppppppkkkkkkoo",
+"......oppo",
+"......oppo",
+"......oppo",
+"......oppo",
+"......okko",
+"......okko",
+"......okko",
+"......okko",
+".......okko",
+".....ookkkoo",
+".....ooooooo",
+],
+sweep: [
+"",
+"",
+"",
+"",
+"",
+"",
+"..........ohho",
+".........ohhhho",
+"........ohhhhhho",
+"........ohhhhhho",
+".....ww.owwwwwwo",
+"........ohssssso",
+"........ohshshso",
+"........ohssssdo",
+".......ocaaaaaaco",
+"......ocaaaaaaaaco",
+"......obaaaaaaasso",
+"......obbaaaaaasso",
+".....googgggggggso",
+".....oppppppppo",
+".....oppppppppo",
+".....oppppppppo",
+".....oppppppppo",
+".....oppppppppo",
+".....okkkkkkko",
+".....okkkkkko.oppppppppppppoo",
+".....okkkkkko.opppppppkkkkkoo",
+"....ookkkkkoo.opppppppkkkkkoo",
+"....ooooooo",
+"",
+],
+throwA: [
+"..........ohho",
+".........ohhhho",
+"........ohhhhhho",
+"........ohhhhhho",
+".....ww.owwwwwwo",
+"........ohssssso",
+"........ohshshso",
+"........ohssssdo",
+".........osssso",
+"...........oso",
+"......occaaaaaacco",
+"......ocbaaaaaabssssso",
+"......obbaaaaaabssssso",
+"......obaaaaaaabbo",
+"......obbbaaaaabbo",
+"....ggogggggggggggo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+".....oppppppoppppppo",
+"......opppo...opppo",
+"......opppo...opppo",
+"......opppo...opppo",
+"......okkko...okkko",
+"......okkko...okkko",
+".......okko....okko",
+".....ookkko..ookkkoo",
+".....oooooo..ooooooo",
+],
+hit: [
+"",
+".......ohho",
+"......ohhhho",
+".....ohhhhhho",
+".....ohhhhhho",
+"..ww.owwwwwwo",
+".....ohssssso",
+".....ohshohso",
+".....ohssssdo",
+"......osssso",
+"........oso",
+"....occaaaaaacco",
+"....ocbaaaaaabco.ss",
+"....obbaaaaaabbo.s",
+"....obaaaaaaabbo",
+"..ggogggggggggggo",
+"....oppppppopppppo",
+"....oppppppopppppo",
+"....oppppppopppppo",
+"....oppppppopppppo",
+"....oppppppopppppo",
+"....opppo....opppo",
+"....opppo....opppo",
+"....opppo....opppo",
+"....okkko....okkko",
+"....okkko....okkko",
+"....okkko....okkko",
+".....okko.....okko",
+"...ookkko...ookkkoo",
+"...oooooo...ooooooo",
+],
+ko: [
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"",
+"...ohhho",
+"..ohssshoaaaaaaaaaoopppppppoo",
+"..ohssshoaaaaaaaaaoopppkkkkoo",
+"...ohhho.aaaaaaaaao.ookkkkoo",
+"....ooo..ooooooooo....oooo",
+"",
+"",
+],
+};
+
+/* сюрикен: два кадра вращения, сетка 5x5 */
+const SHURIKEN = [
+[
+"..m",
+"..m",
+"mmomm",
+"..m",
+"..m",
+],
+[
+"m...m",
+".mom.",
+"..o",
+".mom.",
+"m...m",
+],
+];
+
+/* ---------- ПАЛИТРЫ ----------------------------------------- */
+const BASE = { o:"#191722", h:"#232030", w:"#f2ead8", s:"#e6ac7c",
+               d:"#c78757", g:"#e0b74e", k:"#2b2733", m:"#c9d2dd" };
+const PAL = {
+  p1: Object.assign({}, BASE, { a:"#3e6fd0", b:"#2a4c98", c:"#7ba4f0", p:"#2c3158" }),
+  p2: Object.assign({}, BASE, { a:"#c8433c", b:"#8c2a28", c:"#f08a5a", p:"#3d2436" }),
+};
+
+/* ---------- ПРЕРЕНДЕР СПРАЙТОВ ------------------------------ */
+function renderGrid(rows, pal, gw, gh) {
+  const c = document.createElement("canvas");
+  c.width = gw; c.height = gh;
+  const g = c.getContext("2d");
+  for (let y = 0; y < rows.length; y++) {
+    const row = rows[y] || "";
+    if (row.length > gw) console.warn("строка длиннее сетки:", y, row);
+    for (let x = 0; x < Math.min(row.length, gw); x++) {
+      const ch = row[x];
+      if (ch === "." || ch === " ") continue;
+      g.fillStyle = pal[ch] || "#ff00ff";  // маджента = опечатка в спрайте
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  return c;
+}
+function whiteCopy(img) {  // белая вспышка при попадании
+  const c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = "source-in";
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, c.width, c.height);
+  return c;
+}
+const FRAMES = {};   // FRAMES.p1.idle = {img, white}
+for (const pn of ["p1", "p2"]) {
+  FRAMES[pn] = {};
+  for (const fn in RAW) {
+    const img = renderGrid(RAW[fn], PAL[pn], GW, GH);
+    FRAMES[pn][fn] = { img: img, white: whiteCopy(img) };
+  }
+}
+const SHU_IMG = SHURIKEN.map(g => renderGrid(g, BASE, 5, 5));
+
+/* ============================================================
+   АРЕНА — объект-локация. Новая локация = ещё один такой объект.
+   ============================================================ */
+const ARENA = {
+  name: "Храм на закате",
+  left: 60, right: W - 60,
+  bg: null,
+  build() {
+    const c = document.createElement("canvas");
+    c.width = 240; c.height = 135;          // рисуем мелко, растянем x4
+    const g = c.getContext("2d");
+    // небо полосами (закат)
+    const sky = [["#241a48",0],["#3c2258",22],["#642e5e",44],["#96404f",62],
+                 ["#c65f45",76],["#e8894a",86]];
+    for (let i = 0; i < sky.length; i++) {
+      const y0 = sky[i][1];
+      const y1 = (i + 1 < sky.length) ? sky[i+1][1] : 92;
+      g.fillStyle = sky[i][0];
+      g.fillRect(0, y0, 240, y1 - y0);
+    }
+    // солнце
+    g.fillStyle = "#ffcf7e";
+    g.beginPath(); g.arc(186, 66, 15, 0, 7); g.fill();
+    g.fillStyle = "#ffe9b0";
+    g.beginPath(); g.arc(186, 66, 10, 0, 7); g.fill();
+    // горы
+    g.fillStyle = "#301c40";
+    g.beginPath(); g.moveTo(0,92); g.lineTo(38,58); g.lineTo(84,92); g.fill();
+    g.beginPath(); g.moveTo(60,92); g.lineTo(120,48); g.lineTo(190,92); g.fill();
+    g.beginPath(); g.moveTo(160,92); g.lineTo(214,62); g.lineTo(240,92); g.fill();
+    // тории (ворота) силуэтом
+    g.fillStyle = "#1c1226";
+    g.fillRect(88, 44, 64, 6);    // верхняя балка
+    g.fillRect(84, 42, 8, 8); g.fillRect(148, 42, 8, 8); // концы балки
+    g.fillRect(94, 56, 52, 5);    // вторая балка
+    g.fillRect(97, 44, 7, 48);    // левый столб
+    g.fillRect(136, 44, 7, 48);   // правый столб
+    // пол — доски
+    g.fillStyle = "#3a2c33"; g.fillRect(0, 92, 240, 43);
+    g.fillStyle = "#57414a"; g.fillRect(0, 92, 240, 2);
+    g.fillStyle = "#2c2129";
+    for (let x = 6; x < 240; x += 24) g.fillRect(x, 96, 1, 39);
+    for (let y = 104; y < 135; y += 12) g.fillRect(0, y, 240, 1);
+    this.bg = c;
+  },
+  draw() { ctx.drawImage(this.bg, 0, 0, W, H); }
+};
+ARENA.build();
+
+/* ============================================================
+   ВВОД — слой виртуальных кнопок.
+   Клавиатура (две раскладки сразу) пишет сюда; ИИ пишет в свой
+   собственный такой же объект. Логика бойца не знает, кто нажал.
+   ============================================================ */
+function newPad() {
+  return { left:false, right:false, kick:false, sweep:false, shuriken:false };
+}
+const keyPad = newPad();
+let startPressed = false;
+const KEYMAP = {
+  ArrowLeft:"left", KeyA:"left",
+  ArrowRight:"right", KeyD:"right",
+  KeyZ:"kick", KeyJ:"kick",
+  KeyX:"sweep", KeyK:"sweep",
+  KeyC:"shuriken", KeyL:"shuriken",
+};
+window.addEventListener("keydown", e => {
+  if (KEYMAP[e.code]) { keyPad[KEYMAP[e.code]] = true; e.preventDefault(); }
+  if (e.code === "Enter" || e.code === "Space") { startPressed = true; e.preventDefault(); }
+});
+window.addEventListener("keyup", e => {
+  if (KEYMAP[e.code]) keyPad[KEYMAP[e.code]] = false;
+});
+cv.addEventListener("pointerdown", () => { startPressed = true; });
+
+/* ============================================================
+   ДАННЫЕ АТАК: startup / active / recover в тиках.
+   Хитбокс задаётся от якоря вперёд (fx) и от пола вверх (fy).
+   ============================================================ */
+const ATK = {
+  kick:  { startup:8,  active:6, recover:14, dmg:DMG.kick,  stun:22, kb:7,
+           knockdown:false, box:{ fx:14, fy:56, w:62, h:26 } },
+  sweep: { startup:12, active:6, recover:20, dmg:DMG.sweep, stun:0,  kb:5,
+           knockdown:true,  box:{ fx:8,  fy:2,  w:74, h:20 } },
+  throwA:{ startup:10, active:0, recover:16, cooldown:55 },
+};
+
+/* ============================================================
+   БОЕЦ — конечный автомат состояний.
+   ============================================================ */
+const ST = { IDLE:"idle", WALK:"walk", KICK:"kick", SWEEP:"sweep",
+             THROW:"throwA", HIT:"hit", DOWN:"down", GETUP:"getup", KO:"ko" };
+
+class Fighter {
+  constructor(x, palName, name, ctrl) {
+    this.pal = palName; this.name = name; this.ctrl = ctrl;
+    this.reset(x, 1);
+  }
+  reset(x, facing) {
+    this.x = x; this.vx = 0; this.facing = facing;
+    this.hp = HP_MAX;
+    this.state = ST.IDLE; this.t = 0;
+    this.flash = 0; this.invuln = 0; this.shuCd = 0;
+    this.hitLanded = false;
+  }
+  get busy() {
+    return this.state !== ST.IDLE && this.state !== ST.WALK;
+  }
+  hurtbox() {
+    const h = (this.state === ST.SWEEP) ? 64 :
+              (this.state === ST.DOWN || this.state === ST.KO) ? 30 : 100;
+    return { x: this.x - 22, y: GROUND - h, w: 44, h: h };
+  }
+  setState(s) { this.state = s; this.t = 0; this.hitLanded = false; }
+
+  update(world) {
+    this.t++;
+    if (this.flash > 0) this.flash--;
+    if (this.invuln > 0) this.invuln--;
+    if (this.shuCd > 0) this.shuCd--;
+
+    const opp = world.opponent(this);
+    const pad = this.ctrl.pad;
+
+    switch (this.state) {
+      case ST.IDLE:
+      case ST.WALK: {
+        // разворот к противнику — только когда свободен
+        this.facing = (opp.x >= this.x) ? 1 : -1;
+        let dir = 0;
+        if (pad.left) dir -= 1;
+        if (pad.right) dir += 1;
+        this.vx = dir * 3.2;
+        this.setStateKeep(dir !== 0 ? ST.WALK : ST.IDLE);
+        if (pad.kick)  { this.setState(ST.KICK);  break; }
+        if (pad.sweep) { this.setState(ST.SWEEP); break; }
+        if (pad.shuriken && this.shuCd === 0) { this.setState(ST.THROW); break; }
+        break;
+      }
+      case ST.KICK:
+      case ST.SWEEP: {
+        this.vx = 0;
+        const a = ATK[this.state === ST.KICK ? "kick" : "sweep"];
+        const total = a.startup + a.active + a.recover;
+        if (this.t > a.startup && this.t <= a.startup + a.active && !this.hitLanded) {
+          world.tryHit(this, opp, a);
+        }
+        if (this.t >= total) this.setState(ST.IDLE);
+        break;
+      }
+      case ST.THROW: {
+        this.vx = 0;
+        const a = ATK.throwA;
+        if (this.t === a.startup) {
+          world.spawnShuriken(this);
+          this.shuCd = a.cooldown;
+        }
+        if (this.t >= a.startup + a.recover) this.setState(ST.IDLE);
+        break;
+      }
+      case ST.HIT: {
+        this.vx *= 0.85;
+        if (this.t >= this.stunLeft) { this.setState(ST.IDLE); this.invuln = 10; }
+        break;
+      }
+      case ST.DOWN: {
+        this.vx *= 0.8;
+        if (this.t >= 50) this.setState(ST.GETUP);
+        break;
+      }
+      case ST.GETUP: {
+        this.vx = 0;
+        if (this.t >= 18) { this.setState(ST.IDLE); this.invuln = 25; }
+        break;
+      }
+      case ST.KO: {
+        this.vx *= 0.85;
+        break;
+      }
+    }
+
+    this.x += this.vx;
+    if (this.x < ARENA.left) this.x = ARENA.left;
+    if (this.x > ARENA.right) this.x = ARENA.right;
+  }
+  setStateKeep(s) {  // idle<->walk без сброса таймера анимации
+    if (this.state !== s) { this.state = s; }
+  }
+
+  applyHit(a, fromX) {
+    if (this.invuln > 0 || this.state === ST.KO || this.state === ST.DOWN) return false;
+    this.hp = Math.max(0, this.hp - a.dmg);
+    this.flash = 5;
+    const dir = (this.x >= fromX) ? 1 : -1;
+    this.vx = dir * a.kb;
+    if (this.hp <= 0) { this.setState(ST.KO); return true; }
+    if (a.knockdown) { this.setState(ST.DOWN); }
+    else { this.setState(ST.HIT); this.stunLeft = a.stun; }
+    return true;
+  }
+
+  frameName() {
+    switch (this.state) {
+      case ST.IDLE:  return "idle";
+      case ST.WALK:  return (Math.floor(this.t / 8) % 2) ? "walk2" : "walk1";
+      case ST.KICK: {
+        const a = ATK.kick;
+        return (this.t > a.startup && this.t <= a.startup + a.active) ? "kickB" : "kickA";
+      }
+      case ST.SWEEP: return "sweep";
+      case ST.THROW: return "throwA";
+      case ST.HIT:   return "hit";
+      case ST.DOWN:  return (this.t < 10) ? "hit" : "ko";
+      case ST.GETUP: return "kickA";
+      case ST.KO:    return "ko";
+    }
+    return "idle";
+  }
+
+  draw() {
+    // мигание при неуязвимости после подъёма
+    if (this.invuln > 0 && Math.floor(this.t / 3) % 2 === 0 &&
+        (this.state === ST.IDLE || this.state === ST.WALK)) { /* видим через раз */ }
+    const fr = FRAMES[this.pal][this.frameName()];
+    const img = (this.flash > 0) ? fr.white : fr.img;
+    const bob = (this.state === ST.IDLE && Math.floor(this.t / 30) % 2) ? S : 0;
+    // тень
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(this.x, GROUND + 6, 34, 8, 0, 0, 7);
+    ctx.fill();
+    // спрайт с якорем и отражением
+    ctx.save();
+    ctx.translate(this.x, GROUND - GH * S + bob);
+    if (this.facing < 0) ctx.scale(-1, 1);
+    ctx.drawImage(img, -ANCHOR_X * S, 0, GW * S, GH * S);
+    ctx.restore();
+  }
+}
+
+/* ---------- КОНТРОЛЛЕРЫ ------------------------------------- */
+class HumanController {
+  constructor() { this.pad = keyPad; }
+  update() {}
+}
+class AIController {
+  /* ИИ честный: видит только позиции и состояния, ввод игрока
+     не читает. Раз в AI_REACTION тиков принимает решение. */
+  constructor() { this.pad = newPad(); this.timer = 0; this.plan = 0; }
+  update(me, opp) {
+    for (const k in this.pad) this.pad[k] = false;
+    if (me.busy) return;
+    this.timer--;
+    if (this.timer <= 0) {
+      this.timer = AI_REACTION + Math.floor(Math.random() * 8);
+      const dist = Math.abs(opp.x - me.x);
+      const r = Math.random();
+      if (dist > 300) {
+        if (r < 0.30 && me.shuCd === 0) this.plan = 4;       // сюрикен
+        else if (r < 0.30 + AI_AGGRO)   this.plan = 1;       // вперёд
+        else if (r < 0.90)              this.plan = 0;       // стоим
+        else                            this.plan = 2;       // назад
+      } else if (dist > 140) {
+        if (r < AI_AGGRO)      this.plan = 1;
+        else if (r < 0.70)     this.plan = 0;
+        else if (r < 0.85 && me.shuCd === 0) this.plan = 4;
+        else                   this.plan = 2;
+      } else {
+        if (r < 0.45)          this.plan = 3;                // удар ногой
+        else if (r < 0.65)     this.plan = 5;                // подножка
+        else if (r < 0.85)     this.plan = 2;                // отойти
+        else                   this.plan = 0;
+      }
+    }
+    const towards = (opp.x >= me.x) ? "right" : "left";
+    const away    = (opp.x >= me.x) ? "left" : "right";
+    if (this.plan === 1) this.pad[towards] = true;
+    if (this.plan === 2) this.pad[away] = true;
+    if (this.plan === 3) { this.pad.kick = true; this.plan = 0; }
+    if (this.plan === 4) { this.pad.shuriken = true; this.plan = 0; }
+    if (this.plan === 5) { this.pad.sweep = true; this.plan = 0; }
+  }
+}
+
+/* ============================================================
+   МИР: снаряды, искры, проверка попаданий, тряска экрана.
+   ============================================================ */
+const world = {
+  fighters: [], shurikens: [], sparks: [], shake: 0,
+  opponent(f) { return (f === this.fighters[0]) ? this.fighters[1] : this.fighters[0]; },
+  overlap(A, B) {
+    return A.x < B.x + B.w && A.x + A.w > B.x &&
+           A.y < B.y + B.h && A.y + A.h > B.y;
+  },
+  attackBox(f, a) {
+    const w = a.box.w, h = a.box.h;
+    const x = (f.facing > 0) ? f.x + a.box.fx : f.x - a.box.fx - w;
+    return { x: x, y: GROUND - a.box.fy - h, w: w, h: h };
+  },
+  tryHit(attacker, defender, a) {
+    if (this.overlap(this.attackBox(attacker, a), defender.hurtbox())) {
+      attacker.hitLanded = true;
+      const hit = defender.applyHit(a, attacker.x);
+      if (hit) {
+        this.spark(defender.x + defender.facing * -10, GROUND - a.box.fy - 10);
+        this.shake = a.knockdown ? 10 : 6;
+      }
+    }
+  },
+  spawnShuriken(f) {
+    this.shurikens.push({
+      x: f.x + f.facing * 44, y: GROUND - 74,
+      vx: f.facing * 7.5, owner: f, alive: true, t: 0
+    });
+  },
+  spark(x, y) { this.sparks.push({ x: x, y: y, t: 0 }); },
+
+  update() {
+    for (const sh of this.shurikens) {
+      sh.t++; sh.x += sh.vx;
+      if (sh.x < -40 || sh.x > W + 40) sh.alive = false;
+      const target = this.opponent(sh.owner);
+      const hb = target.hurtbox();
+      const box = { x: sh.x - 8, y: sh.y - 8, w: 16, h: 16 };
+      if (sh.alive && this.overlap(box, hb)) {
+        const fake = { dmg: DMG.shuriken, kb: 3, stun: 12, knockdown: false };
+        if (target.applyHit(fake, sh.x - sh.vx * 4)) {
+          this.spark(sh.x, sh.y);
+          this.shake = 4;
+        }
+        sh.alive = false;
+      }
+    }
+    this.shurikens = this.shurikens.filter(s => s.alive);
+    for (const sp of this.sparks) sp.t++;
+    this.sparks = this.sparks.filter(s => s.t < 8);
+    if (this.shake > 0) this.shake--;
+    // тела не проходят друг сквозь друга
+    const [a, b] = this.fighters;
+    if (a && b && Math.abs(a.x - b.x) < 40 &&
+        !(a.state === ST.KO || b.state === ST.KO)) {
+      const push = (a.x < b.x) ? -1 : 1;
+      a.x += push * 1.5; b.x -= push * 1.5;
+    }
+  },
+  draw() {
+    for (const sh of this.shurikens) {
+      const img = SHU_IMG[Math.floor(sh.t / 4) % 2];
+      ctx.drawImage(img, sh.x - 7, sh.y - 7, 15, 15);
+    }
+    for (const sp of this.sparks) {
+      const r = 4 + sp.t * 2.2;
+      ctx.fillStyle = (sp.t % 2) ? "#fff3b0" : "#ffffff";
+      ctx.fillRect(sp.x - r / 2, sp.y - r / 2, r, r / 3);
+      ctx.fillRect(sp.x - r / 6, sp.y - r / 2, r / 3, r);
+    }
+  }
+};
+
+/* ============================================================
+   ИГРА: раунды, HUD, надписи, главный цикл.
+   ============================================================ */
+const game = {
+  mode: "title",   // title | intro | fight | play | ko | matchend
+  timer: 0, round: 1, wins: [0, 0], msg: "",
+  p1: null, p2: null,
+
+  init() {
+    this.p1 = new Fighter(300, "p1", P1_NAME, new HumanController());
+    this.p2 = new Fighter(660, "p2", P2_NAME, new AIController());
+    world.fighters = [this.p1, this.p2];
+  },
+  newMatch() {
+    this.wins = [0, 0]; this.round = 1;
+    this.newRound();
+  },
+  newRound() {
+    this.p1.reset(300, 1); this.p2.reset(660, -1);
+    world.shurikens = []; world.sparks = [];
+    this.mode = "intro"; this.timer = 70;
+  },
+
+  tick() {
+    startConsume: {
+      if (this.mode === "title" && startPressed) { this.newMatch(); break startConsume; }
+      if (this.mode === "matchend" && startPressed) { this.newMatch(); break startConsume; }
+    }
+    startPressed = false;
+
+    if (this.mode === "intro") {
+      if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
+      return;
+    }
+    if (this.mode === "fight") {
+      if (--this.timer <= 0) this.mode = "play";
+      return;
+    }
+    if (this.mode === "play" || this.mode === "ko") {
+      this.p2.ctrl.update(this.p2, this.p1);
+      this.p1.update(world);
+      this.p2.update(world);
+      world.update();
+    }
+    if (this.mode === "play") {
+      const dead1 = this.p1.state === ST.KO, dead2 = this.p2.state === ST.KO;
+      if (dead1 || dead2) {
+        this.mode = "ko"; this.timer = 110;
+        if (dead1 && dead2) this.msg = "НИЧЬЯ";
+        else if (dead2) { this.wins[0]++; this.msg = P1_NAME + " ПОБЕЖДАЕТ"; }
+        else            { this.wins[1]++; this.msg = P2_NAME + " ПОБЕЖДАЕТ"; }
+      }
+    } else if (this.mode === "ko") {
+      if (--this.timer <= 0) {
+        if (this.wins[0] >= WINS_NEEDED || this.wins[1] >= WINS_NEEDED) {
+          this.mode = "matchend";
+        } else {
+          this.round++;
+          this.newRound();
+        }
+      }
+    }
+  },
+
+  drawHUD() {
+    const bw = 380, bh = 22;
+    // рамки
+    ctx.fillStyle = "#191722";
+    ctx.fillRect(28, 24, bw + 4, bh + 4);
+    ctx.fillRect(W - 32 - bw, 24, bw + 4, bh + 4);
+    // здоровье: p1 тает влево, p2 тает вправо (к центру)
+    ctx.fillStyle = "#5a1f28";
+    ctx.fillRect(30, 26, bw, bh);
+    ctx.fillRect(W - 30 - bw, 26, bw, bh);
+    ctx.fillStyle = "#e8c15a";
+    const w1 = bw * this.p1.hp / HP_MAX;
+    const w2 = bw * this.p2.hp / HP_MAX;
+    ctx.fillRect(30 + (bw - w1), 26, w1, bh);
+    ctx.fillRect(W - 30 - bw, 26, w2, bh);
+    // имена
+    ctx.font = "bold 18px 'Courier New', monospace";
+    ctx.fillStyle = "#f2ead8"; ctx.textAlign = "left";
+    ctx.fillText(this.p1.name, 32, 70);
+    ctx.textAlign = "right";
+    ctx.fillText(this.p2.name, W - 32, 70);
+    // очки раундов
+    ctx.textAlign = "center";
+    for (let i = 0; i < WINS_NEEDED; i++) {
+      ctx.fillStyle = (this.wins[0] > i) ? "#e8c15a" : "#3a3c58";
+      ctx.fillRect(W / 2 - 40 - i * 22, 28, 14, 14);
+      ctx.fillStyle = (this.wins[1] > i) ? "#e8c15a" : "#3a3c58";
+      ctx.fillRect(W / 2 + 26 + i * 22, 28, 14, 14);
+    }
+  },
+
+  banner(txt, size, y) {
+    ctx.font = "bold " + size + "px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#191722";
+    ctx.fillText(txt, W / 2 + 4, y + 4);
+    ctx.fillStyle = "#f2ead8";
+    ctx.fillText(txt, W / 2, y);
+  },
+
+  draw() {
+    ctx.save();
+    if (world.shake > 0) {
+      ctx.translate((Math.random() - 0.5) * world.shake * 2,
+                    (Math.random() - 0.5) * world.shake * 2);
+    }
+    ARENA.draw();
+
+    if (this.mode === "title") {
+      this.banner("SAMURAI DUEL", 72, 200);
+      this.banner("нажми ENTER или тапни", 24, 300);
+      this.banner("←→/AD шаг · Z/J удар · X/K подножка · C/L сюрикен", 18, 340);
+      ctx.font = "14px 'Courier New', monospace";
+      ctx.fillStyle = "#cfd2e8"; ctx.textAlign = "right";
+      ctx.fillText("v0.1 · игра Пети", W - 16, H - 14);
+      ctx.restore();
+      return;
+    }
+
+    // порядок: сначала тот, кто левее чуть сзади — простая версия
+    this.p2.draw();
+    this.p1.draw();
+    world.draw();
+    this.drawHUD();
+
+    if (this.mode === "intro") this.banner("РАУНД " + this.round, 64, 260);
+    if (this.mode === "fight") this.banner("БОЙ!", 80, 270);
+    if (this.mode === "ko") {
+      this.banner("K.O.", 96, 250);
+      this.banner(this.msg, 30, 310);
+    }
+    if (this.mode === "matchend") {
+      const winner = (this.wins[0] >= WINS_NEEDED) ? this.p1.name : this.p2.name;
+      this.banner(winner + " — ПОБЕДА В МАТЧЕ!", 44, 250);
+      this.banner("ENTER — реванш", 24, 310);
+    }
+    ctx.restore();
+  }
+};
+
+game.init();
+
+/* ---------- ЦИКЛ: логика на фиксированном шаге --------------- */
+let last = performance.now(), acc = 0;
+function loop(now) {
+  acc += Math.min(100, now - last);
+  last = now;
+  while (acc >= STEP) { game.tick(); acc -= STEP; }
+  game.draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
