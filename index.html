@@ -26,8 +26,8 @@
    ============================================================ */
 
 /* ---------- НАСТРОЙКИ (Петя, менять тут!) ------------------- */
-const P1_NAME = "ПЕТЯ";        // имя игрока
-const P2_NAME = "СЁГУН-БОТ";   // имя ИИ
+const P1_NAME = "НАРУТО";      // имя игрока
+const P2_NAME = "СЕНСЕЙ";      // имя ИИ
 const HP_MAX  = 100;
 const WINS_NEEDED = 2;         // раундов до победы в матче
 const DMG = { kick: 10, sweep: 8, shuriken: 6 };
@@ -36,6 +36,10 @@ const AI_AGGRO    = 0.55;      // агрессивность ИИ 0..1
 const COIN_ROUND  = 10;        // монет за выигранный раунд
 const COIN_MATCH  = 20;        // бонус за победу в матче
 const CYCLE_LEN   = 4200;      // длина «суток» в тиках (~70 секунд)
+const XP_ROUND    = 15;        // опыт за выигранный раунд
+const XP_MATCH    = 40;        // опыт за победу в матче
+const XP_LOSS     = 10;        // опыт за поражение («за тренировку»)
+const LEVELUP_COINS = 15;      // бонус монет за новый уровень
 
 /* ---------- КОНСТАНТЫ ЭКРАНА -------------------------------- */
 const W = 960, H = 540;
@@ -510,6 +514,18 @@ const COIN = [
 "ogggggo",
 ".ooooo.",
 ];
+/* кубок достижений (11x9) */
+const CUP = [
+"o.ooooooo.o",
+"oogggggggoo",
+"o.gwggggg.o",
+"o.ggggggg.o",
+"..ooooooo..",
+"....ogo....",
+"...ooooo...",
+"...ogggo...",
+"...ooooo...",
+];
 
 /* ---------- ПАЛИТРЫ ----------------------------------------- */
 const BASE = { o:"#191722", h:"#232030", w:"#f2ead8", s:"#e6ac7c",
@@ -557,6 +573,8 @@ for (const pn of ["p1", "p2"]) {
 const SHU_IMG = SHURIKEN.map(g => renderGrid(g, BASE, 5, 5));
 const ARROW_IMG = renderGrid(ARROW, BASE, 10, 3);
 const COIN_IMG  = renderGrid(COIN, BASE, 7, 7);
+const CUP_IMG   = renderGrid(CUP, BASE, 11, 9);
+const CUP_OFF   = renderGrid(CUP, { o:"#22243a", g:"#3a3c58", w:"#4a4c68" }, 11, 9);
 
 /* ============================================================
    АРЕНА — объект-локация. Новая локация = ещё один такой объект.
@@ -739,9 +757,33 @@ function loadProfile() {
 const profile = loadProfile();
 if (!profile.owned || profile.owned.indexOf("fist") < 0) profile.owned = ["fist"];
 if (!WEAPONS[profile.equipped]) profile.equipped = "fist";
+profile.xp = profile.xp || 0;
+profile.matchesWon = profile.matchesWon || 0;
+profile.winStreak = profile.winStreak || 0;
+if (!profile.trophies) profile.trophies = [];
 function saveProfile() {
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(profile)); }
   catch (e) { /* играем без сохранения */ }
+}
+
+/* ---------- КУБКИ (достижения) ------------------------------- */
+const TROPHIES = {
+  firstwin: { title: "ПЕРВАЯ ПОБЕДА",  desc: "выиграй свой первый матч" },
+  perfect:  { title: "БЕЗ ЦАРАПИНЫ",   desc: "выиграй раунд, не получив урона" },
+  night:    { title: "НОЧНОЙ ВОИН",    desc: "выиграй раунд ночью" },
+  streak3:  { title: "СЕРИЯ ИЗ ТРЁХ",  desc: "выиграй три матча подряд" },
+  arsenal:  { title: "ПОЛНЫЙ АРСЕНАЛ", desc: "купи всё оружие в магазине" },
+  champ10:  { title: "ЧЕМПИОН",        desc: "выиграй десять матчей" },
+};
+const TROPHY_ORDER = ["firstwin", "perfect", "night", "streak3", "arsenal", "champ10"];
+
+/* ---------- ОПЫТ И УРОВНИ ------------------------------------ */
+/* планка растёт: 80, 120, 160, ... опыта на уровень */
+function xpNeed(level) { return 80 + (level - 1) * 40; }
+function levelInfo(xp) {
+  let level = 1, rest = xp;
+  while (rest >= xpNeed(level)) { rest -= xpNeed(level); level++; }
+  return { level: level, into: rest, need: xpNeed(level) };
 }
 
 /* ============================================================
@@ -1014,6 +1056,20 @@ const world = {
   floater(x, y, txt, color) {
     this.floaters.push({ x: x, y: y, txt: txt, color: color, t: 0 });
   },
+  tickFloaters() {
+    for (const fl of this.floaters) { fl.t++; fl.y -= 0.9; }
+    this.floaters = this.floaters.filter(f => f.t < 45);
+  },
+  drawFloaters() {
+    ctx.font = "bold 20px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    for (const fl of this.floaters) {
+      ctx.globalAlpha = Math.max(0, 1 - fl.t / 45);
+      ctx.fillStyle = "#191722"; ctx.fillText(fl.txt, fl.x + 2, fl.y + 2);
+      ctx.fillStyle = fl.color;  ctx.fillText(fl.txt, fl.x, fl.y);
+      ctx.globalAlpha = 1;
+    }
+  },
   spark(x, y) { this.sparks.push({ x: x, y: y, t: 0 }); },
 
   update() {
@@ -1036,8 +1092,6 @@ const world = {
     this.projectiles = this.projectiles.filter(s => s.alive);
     for (const sp of this.sparks) sp.t++;
     this.sparks = this.sparks.filter(s => s.t < 8);
-    for (const fl of this.floaters) { fl.t++; fl.y -= 0.9; }
-    this.floaters = this.floaters.filter(f => f.t < 45);
     if (this.shake > 0) this.shake--;
     // тела не проходят друг сквозь друга
     const [a, b] = this.fighters;
@@ -1066,14 +1120,7 @@ const world = {
       ctx.fillRect(sp.x - r / 2, sp.y - r / 2, r, r / 3);
       ctx.fillRect(sp.x - r / 6, sp.y - r / 2, r / 3, r);
     }
-    ctx.font = "bold 20px 'Courier New', monospace";
-    ctx.textAlign = "center";
-    for (const fl of this.floaters) {
-      ctx.globalAlpha = Math.max(0, 1 - fl.t / 45);
-      ctx.fillStyle = "#191722"; ctx.fillText(fl.txt, fl.x + 2, fl.y + 2);
-      ctx.fillStyle = fl.color;  ctx.fillText(fl.txt, fl.x, fl.y);
-      ctx.globalAlpha = 1;
-    }
+    this.drawFloaters();
   }
 };
 
@@ -1102,7 +1149,29 @@ const game = {
     this.mode = "intro"; this.timer = 70;
   },
 
-  menuItems() { return ["В БОЙ", "МАГАЗИН"]; },
+  menuItems() { return ["В БОЙ", "МАГАЗИН", "КУБКИ"]; },
+
+  /* ---------- награды ---------- */
+  isNight() {
+    const ph = (cycleT % CYCLE_LEN) / CYCLE_LEN;
+    return ph > 0.57 && ph < 0.93;
+  },
+  gainXp(amount) {
+    const before = levelInfo(profile.xp).level;
+    profile.xp += amount;
+    world.floater(W / 2, 186, "+" + amount + " опыта", "#7ec8ff");
+    const after = levelInfo(profile.xp).level;
+    if (after > before) {
+      profile.coins += LEVELUP_COINS;
+      world.floater(W / 2, 222, "УРОВЕНЬ " + after + "! +" + LEVELUP_COINS + " монет", "#e8c15a");
+    }
+    saveProfile();
+  },
+  awardCup(id) {
+    if (profile.trophies.indexOf(id) >= 0) return;
+    profile.trophies.push(id); saveProfile();
+    world.floater(W / 2, 258, "КУБОК: " + TROPHIES[id].title + "!", "#ffd98a");
+  },
 
   /* ---------- меню и магазин ---------- */
   handleUI(ev) {
@@ -1117,7 +1186,8 @@ const game = {
       }
       if (ev.type === "ok") {
         if (this.menuSel === 0) this.newMatch();
-        else { this.mode = "shop"; this.shopSel = 0; }
+        else if (this.menuSel === 1) { this.mode = "shop"; this.shopSel = 0; }
+        else this.mode = "cups";
       }
     } else if (this.mode === "shop") {
       const n = WEAPON_ORDER.length + 1;    // + «назад»
@@ -1139,8 +1209,12 @@ const game = {
           profile.coins -= wp.price;
           profile.owned.push(id);
           profile.equipped = id; saveProfile();
+          if (profile.owned.length >= WEAPON_ORDER.length) this.awardCup("arsenal");
         }
       }
+    } else if (this.mode === "cups") {
+      if (ev.type === "ok" || ev.type === "back" || ev.type === "click")
+        this.mode = "menu";
     } else if (this.mode === "matchend") {
       if (ev.type === "ok" || ev.type === "click") this.mode = "menu";
     }
@@ -1155,8 +1229,9 @@ const game = {
   tick() {
     cycleT++;                                // сутки идут всегда
     for (const ev of uiEvents.splice(0)) this.handleUI(ev);
+    world.tickFloaters();
 
-    if (this.mode === "menu" || this.mode === "shop") return;
+    if (this.mode === "menu" || this.mode === "shop" || this.mode === "cups") return;
     if (this.mode === "intro") {
       if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
       return;
@@ -1180,6 +1255,9 @@ const game = {
           this.wins[0]++; this.msg = P1_NAME + " ПОБЕЖДАЕТ";
           profile.coins += COIN_ROUND; saveProfile();
           world.floater(W / 2, 150, "+" + COIN_ROUND + " монет", "#e8c15a");
+          this.gainXp(XP_ROUND);
+          if (this.p1.hp === HP_MAX) this.awardCup("perfect");
+          if (this.isNight()) this.awardCup("night");
         } else { this.wins[1]++; this.msg = P2_NAME + " ПОБЕЖДАЕТ"; }
       }
     } else if (this.mode === "ko") {
@@ -1187,7 +1265,18 @@ const game = {
         if (this.wins[0] >= WINS_NEEDED || this.wins[1] >= WINS_NEEDED) {
           if (this.wins[0] >= WINS_NEEDED && !this.matchPaid) {
             this.matchPaid = true;
-            profile.coins += COIN_MATCH; saveProfile();
+            profile.coins += COIN_MATCH;
+            profile.matchesWon++; profile.winStreak++;
+            this.gainXp(XP_MATCH);
+            this.awardCup("firstwin");
+            if (profile.winStreak >= 3) this.awardCup("streak3");
+            if (profile.matchesWon >= 10) this.awardCup("champ10");
+            saveProfile();
+          } else if (this.wins[1] >= WINS_NEEDED && !this.matchPaid) {
+            this.matchPaid = true;
+            profile.winStreak = 0;
+            this.gainXp(XP_LOSS);
+            saveProfile();
           }
           this.mode = "matchend";
         } else { this.round++; this.newRound(); }
@@ -1253,12 +1342,54 @@ const game = {
       ctx.fillText((i === this.menuSel ? "▶ " : "") + items[i] +
                    (i === this.menuSel ? " ◀" : ""), W / 2, 268 + i * 56);
     }
-    this.drawCoins(W / 2 - 34, 384);
+    this.drawStatus(418);
     ctx.font = "16px 'Courier New', monospace";
     ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
-    ctx.fillText("↑↓ выбрать · ENTER подтвердить · оружие в бою: V или I", W / 2, 462);
+    ctx.fillText("↑↓ выбрать · ENTER подтвердить · оружие в бою: V или I", W / 2, 470);
     ctx.textAlign = "right"; ctx.font = "14px 'Courier New', monospace";
-    ctx.fillText("v0.2 · игра Пети", W - 16, H - 14);
+    ctx.fillText("v0.3 · игра Пети", W - 16, H - 14);
+    world.drawFloaters();
+  },
+
+  drawStatus(y) {
+    const li = levelInfo(profile.xp);
+    ctx.font = "bold 20px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = "#7ec8ff";
+    ctx.fillText("УР. " + li.level, W / 2 - 230, y + 16);
+    ctx.fillStyle = "#191722";
+    ctx.fillRect(W / 2 - 150, y + 3, 124, 14);
+    ctx.fillStyle = "#7ec8ff";
+    ctx.fillRect(W / 2 - 148, y + 5, 120 * li.into / li.need, 10);
+    this.drawCoins(W / 2 + 6, y);
+    ctx.drawImage(CUP_IMG, W / 2 + 116, y - 1, 33, 27);
+    ctx.font = "bold 20px 'Courier New', monospace";
+    ctx.fillStyle = "#ffd98a"; ctx.textAlign = "left";
+    ctx.fillText(profile.trophies.length + "/" + TROPHY_ORDER.length, W / 2 + 156, y + 16);
+  },
+
+  drawCups() {
+    ctx.fillStyle = "rgba(10,10,22,0.78)";
+    ctx.fillRect(0, 0, W, H);
+    this.banner("КУБКИ", 52, 96);
+    for (let i = 0; i < TROPHY_ORDER.length; i++) {
+      const id = TROPHY_ORDER[i], tr = TROPHIES[id];
+      const got = profile.trophies.indexOf(id) >= 0;
+      const y = 156 + i * 54;
+      ctx.drawImage(got ? CUP_IMG : CUP_OFF, W / 2 - 268, y - 22, 33, 27);
+      ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
+      ctx.fillStyle = got ? "#f2ead8" : "#787c9c";
+      ctx.fillText(tr.title, W / 2 - 222, y);
+      ctx.font = "15px 'Courier New', monospace";
+      ctx.fillStyle = "#aab0d0";
+      ctx.fillText(tr.desc, W / 2 - 222, y + 20);
+      ctx.font = "bold 20px 'Courier New', monospace"; ctx.textAlign = "right";
+      ctx.fillStyle = got ? "#ffd98a" : "#3a3c58";
+      ctx.fillText(got ? "ПОЛУЧЕН" : "— — —", W / 2 + 268, y);
+    }
+    ctx.font = "16px 'Courier New', monospace";
+    ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
+    ctx.fillText("ENTER или ESC — назад", W / 2, 156 + TROPHY_ORDER.length * 54 + 16);
+    world.drawFloaters();
   },
 
   drawShop() {
@@ -1289,6 +1420,7 @@ const game = {
     ctx.font = "16px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
     ctx.fillText("монеты дают победы: +" + COIN_ROUND + " за раунд, +" +
                  COIN_MATCH + " за матч", W / 2, yb + 44);
+    world.drawFloaters();
   },
 
   draw() {
@@ -1301,6 +1433,7 @@ const game = {
 
     if (this.mode === "menu") { this.drawMenu(); ctx.restore(); return; }
     if (this.mode === "shop") { this.drawShop(); ctx.restore(); return; }
+    if (this.mode === "cups") { this.drawCups(); ctx.restore(); return; }
 
     this.p2.draw();
     this.p1.draw();
