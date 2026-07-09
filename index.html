@@ -8,7 +8,7 @@
   html,body{margin:0;padding:0;background:#0d0e18;color:#cfd2e8;
     font-family:"Courier New",monospace;height:100%;}
   .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;}
-  canvas{width:min(100%,960px);image-rendering:pixelated;image-rendering:crisp-edges;
+  canvas{width:min(100%,960px);touch-action:none;image-rendering:pixelated;image-rendering:crisp-edges;
     border:3px solid #2a2c44;border-radius:6px;background:#000;}
   .hint{font-size:13px;opacity:.7;text-align:center;}
 </style>
@@ -16,12 +16,12 @@
 <body>
 <div class="wrap">
   <canvas id="game" width="960" height="540"></canvas>
-  <div class="hint">1-й: A D шаг, W прыжок, S блок, F джеб, G сильный, R нога, T подножка, Y сюрикен, H оружие. 2-й: стрелки (↑ прыжок, ↓ блок), J джеб, K сильный, U нога, I подножка, O сюрикен, L оружие.</div>
+  <div class="hint">1-й: A D шаг, W прыжок, S блок, F джеб, G сильный, R нога, T подножка, Y сюрикен, H оружие. 2-й: стрелки (↑ прыжок, ↓ блок), J джеб, K сильный, U нога, I подножка, O сюрикен, L оружие. Телефон/планшет: в бою — экранный стик слева, кнопки атак справа.</div>
 </div>
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.6 — проект Пети
+   SAMURAI DUEL v0.7 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -787,6 +787,18 @@ const HEADS = {
     "oouuuuuuuuuuuuuuoo",
     "oooooooooooooooooo",
   ]},
+  ronin: { x: 9, y: 6, rows: [         // самурайский пучок
+    "..hh..",
+    ".hhhh.",
+    ".hhhh.",
+    "..hh..",
+  ]},
+  kitsune: { x: 7, y: 6, rows: [       // лисьи ушки
+    ".h.......h.",
+    "hhh.....hhh",
+    "hwh.....hwh",
+    "hhh.....hhh",
+  ]},
   plain: null,                         // Крокодайл — без убора
 };
 /* смещение головы в кадрах, где боец наклонён; null — не рисовать */
@@ -822,6 +834,13 @@ const OUTFITS = [   /* костюмы Наруто (одежда, волосы �
   { name:"СИНИЙ",     a:"#3e6fd0", b:"#2a4c98", c:"#7ba4f0", p:"#2c3158" },
   { name:"КРАСНЫЙ",   a:"#d04038", b:"#902824", c:"#ff7860", p:"#8c2030" },
   { name:"ЗЕЛЁНЫЙ",   a:"#3fa050", b:"#287038", c:"#70d080", p:"#2c5838" },
+];
+/* герои (v0.7): голова-причёска + цвет волос; hook — фирменный крюк */
+const HEROES = [
+  { name:"НАРУТО",    head:"naruto",  hair:"#f8e040" },
+  { name:"РОНИН",     head:"ronin",   hair:"#2c2836" },
+  { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a" },
+  { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true },
 ];
 const PAL = {
   p1: Object.assign({}, BASE, { h:"#f8e040" }, OUTFITS[0]),
@@ -912,12 +931,16 @@ function buildSkin(key) {
   }
 }
 for (const key in SKINS) buildSkin(key);
-function applyOutfit() {   // смена костюма — пересобираем кадры Наруто
-  PAL.p1 = Object.assign({}, BASE, { h:"#f8e040" }, OUTFITS[profile.outfit]);
+function applyOutfit() {   // облик игрока 1: герой + костюм (v0.7)
+  const hr = HEROES[profile.hero];
+  PAL.p1 = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[profile.outfit]);
+  SKINS.p1[1] = hr.head;
   buildSkin("p1");
 }
-function applyOutfit2() {  // костюм Крокодайла
-  PAL.p2c = Object.assign({}, BASE, OUTFITS[profile.outfit2]);
+function applyOutfit2() {  // облик игрока 2
+  const hr = HEROES[profile.hero2];
+  PAL.p2c = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[profile.outfit2]);
+  SKINS.p2c[1] = hr.head;
   buildSkin("p2c");
 }
 const SHU_IMG = SHURIKEN.map(g => epx2(renderGrid(g, BASE, 5, 5)));
@@ -1116,14 +1139,80 @@ window.addEventListener("keyup", e => {
   if (KEYMAP1[e.code]) keyPad1[KEYMAP1[e.code]] = false;
   if (KEYMAP2[e.code]) keyPad2[KEYMAP2[e.code]] = false;
 });
-cv.addEventListener("pointerdown", e => {
+/* ---------- СЕНСОРНОЕ УПРАВЛЕНИЕ (v0.7) ----------------------
+   Телефон/планшет: левая половина — плавающий стик (вверх прыжок,
+   вниз щит), справа — шесть кнопок атак. Всё пишет в touchPad —
+   ещё один источник HumanController, логика бойца не меняется. */
+const touchPad = newPad();
+const TOUCH_ON = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+const FIGHT_MODES = { intro: 1, fight: 1, play: 1, ko: 1 };
+const stick = { id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
+const touches = new Map();               // pointerId -> точка на холсте
+const TBTNS = [
+  { a: "jab",      t: "ДЖЕБ"   }, { a: "heavy",  t: "СИЛЬН." },
+  { a: "kick",     t: "НОГА"   }, { a: "sweep",  t: "ПОДН."  },
+  { a: "shuriken", t: "СЮРИК." }, { a: "weapon", t: "ОРУЖ."  },
+];
+function tbtnRect(i) {
+  const bw = 104, bh = 62, gap = 10;
+  const col = i % 2, row = (i / 2) | 0;
+  return { x: W - 16 - (2 - col) * (bw + gap) + gap,
+           y: H - 16 - (3 - row) * (bh + gap) + gap, w: bw, h: bh };
+}
+function canvasXY(e) {
   const r = cv.getBoundingClientRect();
-  uiEvents.push({ type: "click",
-    x: (e.clientX - r.left) * W / r.width,
-    y: (e.clientY - r.top) * H / r.height });
+  return { x: (e.clientX - r.left) * W / r.width,
+           y: (e.clientY - r.top) * H / r.height };
+}
+cv.addEventListener("pointerdown", e => {
+  const p = canvasXY(e);
+  if ((e.pointerType === "touch" || e.pointerType === "pen") &&
+      FIGHT_MODES[game.mode]) {
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ок */ }
+    if (p.x < W * 0.44 && stick.id < 0) {
+      stick.id = e.pointerId;
+      stick.ox = p.x; stick.oy = p.y; stick.dx = stick.dy = 0;
+    } else {
+      touches.set(e.pointerId, p);
+    }
+    e.preventDefault();
+    return;                              // в бою тап — не клик по меню
+  }
+  uiEvents.push({ type: "click", x: p.x, y: p.y });
 });
+cv.addEventListener("pointermove", e => {
+  if (e.pointerId === stick.id) {
+    const p = canvasXY(e);
+    stick.dx = p.x - stick.ox; stick.dy = p.y - stick.oy;
+  } else if (touches.has(e.pointerId)) {
+    touches.set(e.pointerId, canvasXY(e));
+  }
+});
+function endTouch(e) {
+  if (e.pointerId === stick.id) { stick.id = -1; stick.dx = stick.dy = 0; }
+  touches.delete(e.pointerId);
+}
+cv.addEventListener("pointerup", endTouch);
+cv.addEventListener("pointercancel", endTouch);
+function updateTouchPad() {              // каждый тик, до контроллеров
+  for (const k in touchPad) touchPad[k] = false;
+  if (stick.id >= 0) {
+    if (stick.dx < -18) touchPad.left  = true;
+    if (stick.dx >  18) touchPad.right = true;
+    if (stick.dy < -34) touchPad.jump  = true;
+    if (stick.dy >  34) touchPad.block = true;
+  }
+  for (const p of touches.values()) {
+    for (let i = 0; i < TBTNS.length; i++) {
+      const r = tbtnRect(i);
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h)
+        touchPad[TBTNS[i].a] = true;
+    }
+  }
+}
 function clearPads() {   // от «залипания» клавиш при потере фокуса
-  for (const k in keyPad1) { keyPad1[k] = false; keyPad2[k] = false; }
+  for (const k in keyPad1) { keyPad1[k] = false; keyPad2[k] = false; touchPad[k] = false; }
+  stick.id = -1; stick.dx = stick.dy = 0; touches.clear();
 }
 window.addEventListener("blur", clearPads);
 
@@ -1196,6 +1285,9 @@ if (!profile.trophies) profile.trophies = [];
 if (profile.difficulty === undefined) profile.difficulty = 1;
 if (profile.arena === undefined) profile.arena = 0;
 if (profile.outfit === undefined || profile.outfit >= OUTFITS.length) profile.outfit = 0;
+if (profile.hero === undefined || profile.hero >= HEROES.length) profile.hero = 0;
+if (profile.hero2 === undefined || profile.hero2 >= HEROES.length) profile.hero2 = 3;
+if (!profile.power) profile.power = { pts: 0, hp: 0, dmg: 0 };
 if (profile.outfit2 === undefined || profile.outfit2 >= OUTFITS.length) profile.outfit2 = 3;
 if (profile.equipped2 === undefined ||
     (profile.equipped2 !== "hook" && !WEAPONS[profile.equipped2])) profile.equipped2 = "hook";
@@ -1237,15 +1329,16 @@ class Fighter {
   constructor(x, palName, name, ctrl) {
     this.pal = palName; this.name = name; this.ctrl = ctrl;
     this.weapon = "fist"; this.hook = false;
+    this.maxHp = HP_MAX; this.dmgMul = 1;
     this.reset(x, 1);
   }
   reset(x, facing) {
     this.x = x; this.vx = 0; this.facing = facing;
-    this.hp = HP_MAX;
+    this.hp = this.maxHp;
     this.state = ST.IDLE; this.t = 0;
     this.yOff = 0; this.vy = 0;
     this.flash = 0; this.invuln = 0; this.shuCd = 0;
-    this.wpnCd = 0; this.dispHp = HP_MAX;
+    this.wpnCd = 0; this.dispHp = this.maxHp;
     this.hitLanded = false; this.crateHit = false;
   }
   get busy() {
@@ -1575,7 +1668,9 @@ const world = {
     }
     if (this.overlap(box, defender.hurtbox())) {
       attacker.hitLanded = true;
-      const hit = defender.applyHit(a, attacker.x);
+      const eff = (attacker.dmgMul !== 1)
+        ? Object.assign({}, a, { dmg: Math.round(a.dmg * attacker.dmgMul) }) : a;
+      const hit = defender.applyHit(eff, attacker.x);
       if (hit) {
         this.spark(defender.x + defender.facing * -10, GROUND - a.box.fy - 10);
         this.shake = a.knockdown ? 10 : 6;
@@ -1713,7 +1808,8 @@ const world = {
       const box = { x: pj.x - pr.size / 2, y: pj.y - pr.size / 2,
                     w: pr.size, h: pr.size };
       if (pj.alive && this.overlap(box, target.hurtbox())) {
-        const fake = { dmg: pr.dmg, kb: pr.kb, stun: pr.stun, knockdown: false };
+        const fake = { dmg: Math.round(pr.dmg * pj.owner.dmgMul),
+                       kb: pr.kb, stun: pr.stun, knockdown: false };
         if (target.applyHit(fake, pj.x - pj.vx * 4)) {
           this.spark(pj.x, pj.y);
           this.shake = 4;
@@ -1797,11 +1893,12 @@ const game = {
   mode: "menu",
   timer: 0, round: 1, wins: [0, 0], msg: "",
   menuSel: 0, shopSel: 0, outfitSel: 0, shopFor: 0, outfitFor: 0, matchPaid: false,
+  heroSel: 0, heroFor: 0, powerSel: 0,
   vsMode: false, arenaIdx: 0,
   p1: null, p2: null,
 
   init() {
-    this.p1 = new Fighter(620, "p1", P1_NAME, new HumanController([keyPad1, keyPad2]));
+    this.p1 = new Fighter(620, "p1", P1_NAME, new HumanController([keyPad1, keyPad2, touchPad]));
     this.p2 = new Fighter(1300, "p2", P2_NAME, new AIController());
     world.fighters = [this.p1, this.p2];
     this.arenaIdx = (profile.arena < THEMES.length) ? profile.arena : 0;
@@ -1811,17 +1908,29 @@ const game = {
     this.wins = [0, 0]; this.round = 1; this.matchPaid = false;
     this.arenaIdx = (profile.arena < THEMES.length) ? profile.arena
                   : Math.floor(Math.random() * THEMES.length);
-    this.p1.ctrl = new HumanController(this.vsMode ? [keyPad1] : [keyPad1, keyPad2]);
+    this.p1.ctrl = new HumanController(this.vsMode
+      ? [keyPad1, touchPad] : [keyPad1, keyPad2, touchPad]);
     this.p2.ctrl = this.vsMode ? new HumanController([keyPad2]) : new AIController();
-    this.p2.name = this.vsMode ? "КРОКОДАЙЛ" : P2_NAME;
+    this.p1.name = HEROES[profile.hero].name;
+    this.p2.name = this.vsMode ? HEROES[profile.hero2].name : P2_NAME;
     this.p2.pal  = this.vsMode ? "p2c" : "p2";
-    this.p2.hook = this.vsMode;
+    this.p1.hook = !!HEROES[profile.hero].hook;
+    this.p2.hook = this.vsMode && !!HEROES[profile.hero2].hook;
     this.newRound();
   },
   newRound() {
+    /* очки силы (v0.7): здоровье и урон живых игроков */
+    const pw = profile.power;
+    this.p1.maxHp = HP_MAX + pw.hp * 8;
+    this.p1.dmgMul = 1 + pw.dmg * 0.08;
+    this.p2.maxHp = this.vsMode ? this.p1.maxHp : HP_MAX;
+    this.p2.dmgMul = this.vsMode ? this.p1.dmgMul : 1;
     this.p1.reset(620, 1); this.p2.reset(1300, -1);
-    this.p1.weapon = profile.equipped;
-    this.p2.weapon = this.vsMode ? profile.equipped2 : DIFFS[profile.difficulty].weapon;
+    const sane = (eq, hero) => (eq === "hook" &&
+      profile.owned.indexOf("hook") < 0 && !HEROES[hero].hook) ? "fist" : eq;
+    this.p1.weapon = sane(profile.equipped, profile.hero);
+    this.p2.weapon = this.vsMode ? sane(profile.equipped2, profile.hero2)
+                                 : DIFFS[profile.difficulty].weapon;
     world.projectiles = []; world.sparks = []; world.floaters = [];
     world.crates = []; world.coinDrops = []; world.chips = [];
     world.crateTimer = CRATE_FIRST[0] +
@@ -1832,8 +1941,9 @@ const game = {
 
   menuItems() {
     return ["В БОЙ (ПРОТИВ СЕНСЕЯ)",
-            "ВДВОЁМ (ПРОТИВ КРОКОДАЙЛА)",
-            "МАГАЗИН", "КУБКИ",
+            "ВДВОЁМ (ДВА ИГРОКА)",
+            "ГЕРОИ: " + HEROES[profile.hero].name + " · " + HEROES[profile.hero2].name,
+            "МАГАЗИН", "ПРОКАЧКА", "КУБКИ",
             "ОДЕЖДА: " + OUTFITS[profile.outfit].name,
             "СЛОЖНОСТЬ: " + DIFFS[profile.difficulty].name,
             "КАРТА: " + (profile.arena < THEMES.length
@@ -1867,17 +1977,19 @@ const game = {
       if (ev.type === "up")   this.menuSel = (this.menuSel + n - 1) % n;
       if (ev.type === "down") this.menuSel = (this.menuSel + 1) % n;
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 200, 38, n);
+        const hit = this.rowAt(ev.y, 176, 33, n);
         if (hit < 0) return;
         this.menuSel = hit; ev = { type: "ok" };
       }
       if (ev.type === "ok") {
         if (this.menuSel === 0) this.newMatch(false);
         else if (this.menuSel === 1) this.newMatch(true);
-        else if (this.menuSel === 2) { this.mode = "shop"; this.shopSel = 0; }
-        else if (this.menuSel === 3) this.mode = "cups";
-        else if (this.menuSel === 4) { this.mode = "outfit"; this.outfitSel = profile.outfit; }
-        else if (this.menuSel === 5) {
+        else if (this.menuSel === 2) { this.mode = "heroes"; this.heroSel = 1 + profile.hero; }
+        else if (this.menuSel === 3) { this.mode = "shop"; this.shopSel = 0; }
+        else if (this.menuSel === 4) { this.mode = "power"; this.powerSel = 0; }
+        else if (this.menuSel === 5) this.mode = "cups";
+        else if (this.menuSel === 6) { this.mode = "outfit"; this.outfitSel = profile.outfit; }
+        else if (this.menuSel === 7) {
           profile.difficulty = (profile.difficulty + 1) % DIFFS.length;
           saveProfile();
         } else {
@@ -1903,6 +2015,42 @@ const game = {
         else { profile.outfit2 = this.outfitSel - 1; applyOutfit2(); }
         saveProfile();
       }
+    } else if (this.mode === "heroes") {
+      const n = HEROES.length + 2;
+      if (ev.type === "up")   this.heroSel = (this.heroSel + n - 1) % n;
+      if (ev.type === "down") this.heroSel = (this.heroSel + 1) % n;
+      if (ev.type === "back") { this.mode = "menu"; return; }
+      if (ev.type === "click") {
+        const hit = this.rowAt(ev.y, 150, 46, n);
+        if (hit < 0) return;
+        this.heroSel = hit; ev = { type: "ok" };
+      }
+      if (ev.type === "ok") {
+        if (this.heroSel === 0) { this.heroFor = 1 - this.heroFor; return; }
+        if (this.heroSel === HEROES.length + 1) { this.mode = "menu"; return; }
+        if (this.heroFor === 0) { profile.hero = this.heroSel - 1; applyOutfit(); }
+        else { profile.hero2 = this.heroSel - 1; applyOutfit2(); }
+        saveProfile();
+      }
+    } else if (this.mode === "power") {
+      const n = 3;                       // здоровье, удар, назад
+      if (ev.type === "up")   this.powerSel = (this.powerSel + n - 1) % n;
+      if (ev.type === "down") this.powerSel = (this.powerSel + 1) % n;
+      if (ev.type === "back") { this.mode = "menu"; return; }
+      if (ev.type === "click") {
+        const hit = this.rowAt(ev.y, 210, 56, n);
+        if (hit < 0) return;
+        this.powerSel = hit; ev = { type: "ok" };
+      }
+      if (ev.type === "ok") {
+        if (this.powerSel === 2) { this.mode = "menu"; return; }
+        const pw = profile.power, key = (this.powerSel === 0) ? "hp" : "dmg";
+        if (pw.pts > 0 && pw[key] < 5) {
+          pw.pts--; pw[key]++;
+          saveProfile();
+          world.floater(W / 2, 170, "ПРОКАЧАНО!", "#7ec8ff");
+        }
+      }
     } else if (this.mode === "shop") {
       const n = WEAPON_ORDER.length + 2;
       if (ev.type === "up")   this.shopSel = (this.shopSel + n - 1) % n;
@@ -1919,7 +2067,8 @@ const game = {
         const id = WEAPON_ORDER[this.shopSel - 1];
         const wp = WEAPONS[id];
         const ownedEff = profile.owned.indexOf(id) >= 0 ||
-                         (this.shopFor === 1 && id === "hook");
+                         (id === "hook" &&
+                          HEROES[this.shopFor === 0 ? profile.hero : profile.hero2].hook);
         if (ownedEff) {
           if (this.shopFor === 0) profile.equipped = id; else profile.equipped2 = id;
           saveProfile();
@@ -1947,11 +2096,13 @@ const game = {
 
   tick() {
     cycleT++;
+    updateTouchPad();
     world.tickFloaters();
     for (const ev of uiEvents.splice(0)) this.handleUI(ev);
 
     if (this.mode === "menu" || this.mode === "shop" ||
-        this.mode === "cups" || this.mode === "outfit") return;
+        this.mode === "cups" || this.mode === "outfit" ||
+        this.mode === "heroes" || this.mode === "power") return;
     if (this.mode === "intro") {
       if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
       return;
@@ -1978,7 +2129,7 @@ const game = {
             profile.coins += COIN_ROUND; saveProfile();
             world.floater(W / 2, 150, "+" + COIN_ROUND + " монет", "#e8c15a");
             this.gainXp(XP_ROUND);
-            if (this.p1.hp === HP_MAX) this.awardCup("perfect");
+            if (this.p1.hp === this.p1.maxHp) this.awardCup("perfect");
             if (this.isNight()) this.awardCup("night");
           }
         } else { this.wins[1]++; this.msg = this.p2.name + " ПОБЕЖДАЕТ"; }
@@ -1989,6 +2140,8 @@ const game = {
           if (!this.vsMode && this.wins[0] >= WINS_NEEDED && !this.matchPaid) {
             this.matchPaid = true;
             profile.coins += COIN_MATCH;
+            profile.power.pts++;
+            world.floater(W / 2, 122, "+1 ОЧКО СИЛЫ", "#9be07a");
             profile.matchesWon++; profile.winStreak++;
             this.gainXp(XP_MATCH);
             this.awardCup("firstwin");
@@ -2020,18 +2173,18 @@ const game = {
     ctx.fillRect(28, 24, bw + 4, bh + 4);
     ctx.fillRect(W - 32 - bw, 24, bw + 4, bh + 4);
     ctx.fillStyle = "#a03a30";
-    const c1 = bw * this.p1.dispHp / HP_MAX, c2 = bw * this.p2.dispHp / HP_MAX;
+    const c1 = bw * this.p1.dispHp / this.p1.maxHp, c2 = bw * this.p2.dispHp / this.p2.maxHp;
     ctx.fillRect(30 + (bw - c1), 26, c1, bh);
     ctx.fillRect(W - 30 - bw, 26, c2, bh);
     ctx.fillStyle = "#46c85a";
-    const w1 = bw * this.p1.hp / HP_MAX, w2 = bw * this.p2.hp / HP_MAX;
+    const w1 = bw * this.p1.hp / this.p1.maxHp, w2 = bw * this.p2.hp / this.p2.maxHp;
     ctx.fillRect(30 + (bw - w1), 26, w1, bh);
     ctx.fillRect(W - 30 - bw, 26, w2, bh);
     ctx.font = "bold 18px 'Courier New', monospace";
     ctx.fillStyle = "#f2ead8"; ctx.textAlign = "left";
-    ctx.fillText(this.p1.name + "  " + this.p1.hp + "/" + HP_MAX, 32, 70);
+    ctx.fillText(this.p1.name + "  " + this.p1.hp + "/" + this.p1.maxHp, 32, 70);
     ctx.textAlign = "right";
-    ctx.fillText(this.p2.hp + "/" + HP_MAX + "  " + this.p2.name, W - 32, 70);
+    ctx.fillText(this.p2.hp + "/" + this.p2.maxHp + "  " + this.p2.name, W - 32, 70);
     for (let i = 0; i < WINS_NEEDED; i++) {
       ctx.fillStyle = (this.wins[0] > i) ? "#e8c15a" : "#3a3c58";
       ctx.fillRect(W / 2 - 40 - i * 22, 28, 14, 14);
@@ -2060,6 +2213,92 @@ const game = {
     ctx.fillText(txt, W / 2, y);
   },
 
+  drawTouchUI() {                      // полупрозрачный стик и кнопки
+    const ax = (stick.id >= 0) ? stick.ox : 150;
+    const ay = (stick.id >= 0) ? stick.oy : H - 130;
+    ctx.globalAlpha = 0.26;
+    ctx.fillStyle = "#cfd2e8";
+    ctx.beginPath(); ctx.arc(ax, ay, 52, 0, 7); ctx.fill();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = "#f2ead8";
+    const kx = ax + Math.max(-40, Math.min(40, stick.dx));
+    const ky = ay + Math.max(-40, Math.min(40, stick.dy));
+    ctx.beginPath(); ctx.arc(kx, ky, 24, 0, 7); ctx.fill();
+    ctx.font = "bold 16px 'Courier New', monospace"; ctx.textAlign = "center";
+    for (let i = 0; i < TBTNS.length; i++) {
+      const r = tbtnRect(i), on = touchPad[TBTNS[i].a];
+      ctx.globalAlpha = on ? 0.6 : 0.26;
+      ctx.fillStyle = on ? "#e8c15a" : "#cfd2e8";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = "#0d0e18";
+      ctx.fillText(TBTNS[i].t, r.x + r.w / 2, r.y + r.h / 2 + 6);
+    }
+    ctx.globalAlpha = 1;
+  },
+
+  drawHeroes() {
+    ctx.fillStyle = "rgba(10,10,22,0.75)"; ctx.fillRect(0, 0, W, H);
+    this.banner("ГЕРОИ", 46, 92);
+    const cur = this.heroFor === 0 ? profile.hero : profile.hero2;
+    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = (this.heroSel === 0) ? "#e8c15a" : "#7ec8ff";
+    ctx.fillText((this.heroSel === 0 ? "▶ " : "  ") + "ВЫБИРАЕТ: ИГРОК " +
+                 (this.heroFor + 1) + " ⇄", W / 2 - 240, 150);
+    for (let i = 0; i < HEROES.length; i++) {
+      const y = 196 + i * 46;
+      ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
+      ctx.fillStyle = (i + 1 === this.heroSel) ? "#e8c15a" : "#f2ead8";
+      ctx.fillText((i + 1 === this.heroSel ? "▶ " : "  ") + HEROES[i].name +
+                   (HEROES[i].hook ? " (свой крюк)" : ""), W / 2 - 240, y);
+      if (i === cur) {
+        ctx.fillStyle = "#7ec8ff"; ctx.font = "bold 17px 'Courier New', monospace";
+        ctx.fillText("ВЫБРАН", W / 2 + 60, y);
+      }
+    }
+    const yb = 196 + HEROES.length * 46;
+    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = (this.heroSel === HEROES.length + 1) ? "#e8c15a" : "#f2ead8";
+    ctx.fillText((this.heroSel === HEROES.length + 1 ? "▶ " : "  ") + "НАЗАД", W / 2 - 240, yb);
+    ctx.drawImage(FRAMES[this.heroFor === 0 ? "p1" : "p2c"].idle.img,
+                  W / 2 + 150, 150, GW * 5, GH * 5);
+    ctx.font = "15px 'Courier New', monospace";
+    ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
+    ctx.fillText("цвет одежды героя меняется в меню ОДЕЖДА", W / 2, yb + 40);
+    world.drawFloaters();
+  },
+
+  drawPower() {
+    ctx.fillStyle = "rgba(10,10,22,0.75)"; ctx.fillRect(0, 0, W, H);
+    this.banner("ПРОКАЧКА", 44, 92);
+    const pw = profile.power;
+    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = "#9be07a";
+    ctx.fillText("ОЧКИ СИЛЫ: " + pw.pts + "  (+1 за победу в матче с СЕНСЕЕМ)", W / 2, 154);
+    const rows = [
+      { t: "ЗДОРОВЬЕ",   lv: pw.hp,  d: "+8 макс. здоровья за очко" },
+      { t: "СИЛА УДАРА", lv: pw.dmg, d: "+8% урона за очко" },
+    ];
+    for (let i = 0; i < rows.length; i++) {
+      const y = 210 + i * 56, r = rows[i];
+      ctx.font = "bold 25px 'Courier New', monospace"; ctx.textAlign = "center";
+      ctx.fillStyle = (i === this.powerSel) ? "#e8c15a"
+                    : (pw.pts === 0 || r.lv >= 5) ? "#787c9c" : "#f2ead8";
+      ctx.fillText((i === this.powerSel ? "▶ " : "") + r.t + ": " +
+                   "★".repeat(r.lv) + "☆".repeat(5 - r.lv) +
+                   (r.lv >= 5 ? " МАКС" : ""), W / 2, y);
+      ctx.font = "14px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+      ctx.fillText(r.d, W / 2, y + 20);
+    }
+    const yb = 210 + rows.length * 56;
+    ctx.font = "bold 25px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = (this.powerSel === 2) ? "#e8c15a" : "#f2ead8";
+    ctx.fillText((this.powerSel === 2 ? "▶ " : "") + "НАЗАД", W / 2, yb);
+    ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+    ctx.fillText("прокачка у живых игроков — у СЕНСЕЯ всегда 100 здоровья", W / 2, yb + 36);
+    world.drawFloaters();
+  },
+
   drawMenu() {
     ctx.fillStyle = "rgba(10,10,22,0.55)";
     ctx.fillRect(0, 0, W, H);
@@ -2069,7 +2308,7 @@ const game = {
     for (let i = 0; i < items.length; i++) {
       ctx.fillStyle = (i === this.menuSel) ? "#e8c15a" : "#f2ead8";
       ctx.fillText((i === this.menuSel ? "▶ " : "") + items[i] +
-                   (i === this.menuSel ? " ◀" : ""), W / 2, 200 + i * 38);
+                   (i === this.menuSel ? " ◀" : ""), W / 2, 176 + i * 33);
     }
     this.drawStatus(456);
     ctx.font = "14px 'Courier New', monospace";
@@ -2077,7 +2316,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.6 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.7 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2103,8 +2342,8 @@ const game = {
     const cur = this.outfitFor === 0 ? profile.outfit : profile.outfit2;
     ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
     ctx.fillStyle = (this.outfitSel === 0) ? "#e8c15a" : "#7ec8ff";
-    ctx.fillText((this.outfitSel === 0 ? "▶ " : "  ") + "ОДЕВАЕМ: " +
-                 (this.outfitFor === 0 ? "НАРУТО" : "КРОКОДАЙЛ") + " ⇄", W / 2 - 240, 150);
+    ctx.fillText((this.outfitSel === 0 ? "▶ " : "  ") + "ОДЕВАЕМ: ИГРОК " +
+                 (this.outfitFor + 1) + " ⇄", W / 2 - 240, 150);
     for (let i = 0; i < OUTFITS.length; i++) {
       const y = 196 + i * 46;
       ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
@@ -2133,13 +2372,14 @@ const game = {
     this.drawCoins(W - 180, 40);
     ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "center";
     ctx.fillStyle = (this.shopSel === 0) ? "#e8c15a" : "#7ec8ff";
-    ctx.fillText((this.shopSel === 0 ? "▶ " : "") + "ПОКУПАЕТ: " +
-                 (this.shopFor === 0 ? "НАРУТО" : "КРОКОДАЙЛ") + " ⇄", W / 2, 150);
+    ctx.fillText((this.shopSel === 0 ? "▶ " : "") + "ПОКУПАЕТ: ИГРОК " +
+                 (this.shopFor + 1) + " ⇄", W / 2, 150);
     for (let i = 0; i < WEAPON_ORDER.length; i++) {
       const id = WEAPON_ORDER[i], wp = WEAPONS[id];
       const y = 200 + i * 50;
       const ownedEff = profile.owned.indexOf(id) >= 0 ||
-                       (this.shopFor === 1 && id === "hook");
+                       (id === "hook" &&
+                        HEROES[this.shopFor === 0 ? profile.hero : profile.hero2].hook);
       const eq = (this.shopFor === 0 ? profile.equipped : profile.equipped2) === id;
       const right = ownedEff ? (eq ? "ВЫБРАНО" : "выбрать") : (wp.price + " монет");
       ctx.font = "bold 25px 'Courier New', monospace"; ctx.textAlign = "center";
@@ -2159,7 +2399,7 @@ const game = {
     ctx.fillStyle = (this.shopSel === WEAPON_ORDER.length + 1) ? "#e8c15a" : "#f2ead8";
     ctx.fillText((this.shopSel === WEAPON_ORDER.length + 1 ? "▶ " : "") + "НАЗАД", W / 2, yb);
     ctx.font = "14px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
-    ctx.fillText("монеты общие · крюк у КРОКОДАЙЛА свой, бесплатный", W / 2, yb + 32);
+    ctx.fillText("монеты общие · у героя КРОКОДАЙЛ свой крюк, бесплатный", W / 2, yb + 32);
     world.drawFloaters();
   },
 
@@ -2201,6 +2441,8 @@ const game = {
     ARENA.draw(cycleT, this.arenaIdx, camera.x);
 
     if (this.mode === "menu")   { this.drawMenu();   ctx.restore(); return; }
+    if (this.mode === "heroes") { this.drawHeroes(); ctx.restore(); return; }
+    if (this.mode === "power")  { this.drawPower();  ctx.restore(); return; }
     if (this.mode === "shop")   { this.drawShop();   ctx.restore(); return; }
     if (this.mode === "cups")   { this.drawCups();   ctx.restore(); return; }
     if (this.mode === "outfit") { this.drawOutfit(); ctx.restore(); return; }
@@ -2216,6 +2458,7 @@ const game = {
     this.drawMarker(this.p2, "#ff7a5c");
     world.drawFloaters();
     this.drawHUD();
+    if (TOUCH_ON && FIGHT_MODES[this.mode]) this.drawTouchUI();
 
     if (this.mode === "intro") {
       this.banner("РАУНД " + this.round, 64, 260);
