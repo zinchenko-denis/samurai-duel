@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.1 — проект Пети
+   SAMURAI DUEL v0.6 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -43,6 +43,20 @@ const XP_MATCH    = 40;        // опыт за победу в матче
 const XP_LOSS     = 10;        // опыт за поражение («за тренировку»)
 const LEVELUP_COINS = 15;      // бонус монет за новый уровень
 
+/* ---------- ЯЩИКИ С МОНЕТАМИ (v0.6) -------------------------
+   Порядок Пети: сверху — самое ценное. weight — шанс из 100. */
+const RARITIES = [
+  { name:"ЛЕГЕНДАРНЫЙ", color:"#ffb52e", coins:30, weight:2  },
+  { name:"МИФИЧЕСКИЙ",  color:"#ff4d6d", coins:20, weight:5  },
+  { name:"ЭПИЧЕСКИЙ",   color:"#b45cff", coins:12, weight:11 },
+  { name:"РЕДКИЙ",      color:"#4aa3ff", coins:6,  weight:20 },
+  { name:"ОБЫЧНЫЙ",     color:"#e8e8f0", coins:3,  weight:30 },
+  { name:"РЖАВЫЙ",      color:"#a06a38", coins:1,  weight:32 },
+];
+const CRATE_HP    = 2;             // ударов, чтобы разбить ящик
+const CRATE_GAP   = [540, 900];    // пауза между ящиками (9–15 с)
+const CRATE_FIRST = [240, 420];    // первый ящик раунда (4–7 с)
+
 /* сложности бота: реакция (тики), агрессия, оружие бота */
 const DIFFS = [
   { name: "ЛЁГКИЙ",  react: 22, aggro: 0.35, weapon: "fist" },
@@ -58,6 +72,11 @@ const STEP = 1000 / 60;        // фиксированный шаг: 60 тико
 
 const cv = document.getElementById("game");
 const ctx = cv.getContext("2d");
+/* HiDPI (v0.6): холст во «внутреннем» разрешении экрана — чётче на
+   Retina/iPad. Игра рисует в координатах 960x540, масштаб задаёт
+   setTransform в главном цикле. */
+const DPR = Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
+cv.width = W * DPR; cv.height = H * DPR;
 ctx.imageSmoothingEnabled = false;
 
 /* ============================================================
@@ -837,6 +856,45 @@ function whiteCopy(img) {  // белая вспышка при попадани�
   g.fillRect(0, 0, c.width, c.height);
   return c;
 }
+/* EPX/Scale2x (v0.6): умное удвоение пиксель-арта — «лесенки» на
+   диагоналях сглаживаются, стиль сохраняется. Считаем один раз при
+   сборке спрайта, в бою — обычный drawImage. */
+function epx2(src) {
+  const w = src.width, h = src.height;
+  const s32 = new Uint32Array(
+    src.getContext("2d").getImageData(0, 0, w, h).data.buffer);
+  const dst = document.createElement("canvas");
+  dst.width = w * 2; dst.height = h * 2;
+  const g = dst.getContext("2d");
+  const out = g.createImageData(w * 2, h * 2);
+  const o32 = new Uint32Array(out.data.buffer);
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h) ? 0 : s32[y * w + x];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const P = at(x, y), A = at(x, y - 1), B = at(x + 1, y),
+            C = at(x - 1, y), D = at(x, y + 1);
+      let e0 = P, e1 = P, e2 = P, e3 = P;
+      if (C === A && C !== D && A !== B) e0 = A;
+      if (A === B && A !== C && B !== D) e1 = B;
+      if (D === C && D !== B && C !== A) e2 = C;
+      if (B === D && B !== A && D !== C) e3 = D;
+      const i = (y * 2) * (w * 2) + x * 2;
+      o32[i] = e0; o32[i + 1] = e1;
+      o32[i + w * 2] = e2; o32[i + w * 2 + 1] = e3;
+    }
+  }
+  g.putImageData(out, 0, 0);
+  return dst;
+}
+function shade(hex, k) {   // оттенок цвета: k>0 светлее, k<0 темнее
+  const v = parseInt(hex.slice(1), 16);
+  const f = sh => {
+    let c = (v >> sh) & 255;
+    c = (k >= 0) ? c + (255 - c) * k : c * (1 + k);
+    return Math.round(c);
+  };
+  return "rgb(" + f(16) + "," + f(8) + "," + f(0) + ")";
+}
 const FRAMES = {};   // FRAMES[скин][кадр] = {img, white}
 const SKINS = { p1: ["p1", "naruto"], p2: ["p2", "sensei"], p2c: ["p2c", "plain"] };
 function buildSkin(key) {
@@ -849,7 +907,8 @@ function buildSkin(key) {
       const hc = renderGrid(head.rows, pal, head.rows[0].length, head.rows.length);
       img.getContext("2d").drawImage(hc, head.x + shift.dx, head.y + shift.dy);
     }
-    FRAMES[key][fn] = { img: img, white: whiteCopy(img) };
+    const hd = epx2(img);                    // сглаженная x2 версия
+    FRAMES[key][fn] = { img: hd, white: whiteCopy(hd) };
   }
 }
 for (const key in SKINS) buildSkin(key);
@@ -861,13 +920,43 @@ function applyOutfit2() {  // костюм Крокодайла
   PAL.p2c = Object.assign({}, BASE, OUTFITS[profile.outfit2]);
   buildSkin("p2c");
 }
-const SHU_IMG = SHURIKEN.map(g => renderGrid(g, BASE, 5, 5));
-const ARROW_IMG = renderGrid(ARROW, BASE, 10, 3);
-const COIN_IMG  = renderGrid(COIN, BASE, 7, 7);
-const CUP_IMG   = renderGrid(CUP, BASE, 11, 9);
-const CUP_OFF   = renderGrid(CUP, { o:"#22243a", g:"#3a3c58", w:"#4a4c68" }, 11, 9);
-const HOOK_IMG  = renderGrid(HOOK, BASE, 7, 7);
-const KUNAI_IMG = renderGrid(KUNAI, BASE, 8, 3);
+const SHU_IMG = SHURIKEN.map(g => epx2(renderGrid(g, BASE, 5, 5)));
+const ARROW_IMG = epx2(renderGrid(ARROW, BASE, 10, 3));
+const COIN_IMG  = epx2(renderGrid(COIN, BASE, 7, 7));
+const CUP_IMG   = epx2(renderGrid(CUP, BASE, 11, 9));
+const CUP_OFF   = epx2(renderGrid(CUP, { o:"#22243a", g:"#3a3c58", w:"#4a4c68" }, 11, 9));
+const HOOK_IMG  = epx2(renderGrid(HOOK, BASE, 7, 7));
+const KUNAI_IMG = epx2(renderGrid(KUNAI, BASE, 8, 3));
+
+/* ---------- ЯЩИК (v0.6): дерево 20x17, рамка и крест из досок */
+const CRATE = [
+"oooooooooooooooooooo",
+"oguuuuuuuuuuuuuuuugo",
+"ossddddddddddddddsso",
+"odssddddddddddddssdo",
+"odddssddddddddssdddo",
+"oddddssddddddssddddo",
+"odddddssddddssdddddo",
+"odddddddssssdddddddo",
+"oddddddddssddddddddo",
+"odddddddssssdddddddo",
+"odddddssddddssdddddo",
+"oddddssddddddssddddo",
+"odddssddddddddssdddo",
+"odssddddddddddddssdo",
+"ossddddddddddddddsso",
+"ogddddddddddddddddgo",
+"oooooooooooooooooooo",
+];
+const CR_GW = 20, CR_GH = 17, CR_S = 4;        // 80x68 на экране
+const CRATE_IMG   = epx2(renderGrid(CRATE, BASE, CR_GW, CR_GH));
+const CRATE_WHITE = whiteCopy(CRATE_IMG);
+/* монеты редкостей: перекрашенная золотая монета */
+for (const rar of RARITIES) {
+  rar.img = epx2(renderGrid(COIN, {
+    o: shade(rar.color, -0.62), g: rar.color, w: shade(rar.color, 0.55),
+  }, 7, 7));
+}
 
 /* ============================================================
    АРЕНА — объект-локация. Новая локация = ещё один такой объект.
@@ -1157,7 +1246,7 @@ class Fighter {
     this.yOff = 0; this.vy = 0;
     this.flash = 0; this.invuln = 0; this.shuCd = 0;
     this.wpnCd = 0; this.dispHp = HP_MAX;
-    this.hitLanded = false;
+    this.hitLanded = false; this.crateHit = false;
   }
   get busy() {
     return this.state !== ST.IDLE && this.state !== ST.WALK;
@@ -1167,7 +1256,7 @@ class Fighter {
               (this.state === ST.DOWN || this.state === ST.KO) ? 30 : 100;
     return { x: this.x - 22, y: GROUND - h + this.yOff, w: 44, h: h };
   }
-  setState(s) { this.state = s; this.t = 0; this.hitLanded = false; }
+  setState(s) { this.state = s; this.t = 0; this.hitLanded = false; this.crateHit = false; }
 
   update(world) {
     this.t++;
@@ -1387,7 +1476,7 @@ class Fighter {
 
 /* ---------- КОНТРОЛЛЕРЫ ------------------------------------- */
 class HumanController {
-  constructor(sources) { this.sources = sources; this.pad = newPad(); }
+  constructor(sources) { this.sources = sources; this.pad = newPad(); this.human = true; }
   update() {
     for (const k in this.pad) this.pad[k] = this.sources.some(s => s[k]);
   }
@@ -1462,6 +1551,7 @@ class AIController {
    ============================================================ */
 const world = {
   fighters: [], projectiles: [], sparks: [], floaters: [], shake: 0,
+  crates: [], coinDrops: [], chips: [], crateTimer: 300,
   opponent(f) { return (f === this.fighters[0]) ? this.fighters[1] : this.fighters[0]; },
   overlap(A, B) {
     return A.x < B.x + B.w && A.x + A.w > B.x &&
@@ -1473,7 +1563,17 @@ const world = {
     return { x: x, y: GROUND - a.box.fy - h + f.yOff, w: w, h: h };
   },
   tryHit(attacker, defender, a) {
-    if (this.overlap(this.attackBox(attacker, a), defender.hurtbox())) {
+    const box = this.attackBox(attacker, a);
+    if (!attacker.crateHit) {          // ящик ломается тем же ударом
+      for (const cr of this.crates) {
+        if (cr.landed && this.overlap(box, this.crateBox(cr))) {
+          attacker.crateHit = true;
+          this.hitCrate(cr, attacker.x);
+          break;
+        }
+      }
+    }
+    if (this.overlap(box, defender.hurtbox())) {
       attacker.hitLanded = true;
       const hit = defender.applyHit(a, attacker.x);
       if (hit) {
@@ -1489,6 +1589,50 @@ const world = {
       x: f.x + f.facing * 44, y: GROUND - 74,
       vx: f.facing * pr.speed, owner: f, alive: true, t: 0
     });
+  },
+
+  /* ---------- ящики с монетами (v0.6) ------------------------ */
+  crateBox(cr) {
+    return { x: cr.x - CR_GW * CR_S / 2, y: cr.y,
+             w: CR_GW * CR_S, h: CR_GH * CR_S };
+  },
+  spawnCrate() {
+    let x = 0;
+    for (let tries = 0; tries < 12; tries++) {   // подальше от бойцов
+      x = ARENA.left + 80 + Math.random() * (ARENA.right - ARENA.left - 160);
+      const okF = this.fighters.every(f => Math.abs(f.x - x) > 110);
+      const okC = this.crates.every(c => Math.abs(c.x - x) > 140);
+      if (okF && okC) break;
+    }
+    this.crates.push({ x: x, y: -90, vy: 0, hp: CRATE_HP,
+                       landed: false, flash: 0, dir: 1, alive: true });
+  },
+  rollRarity() {
+    let r = Math.random() * 100;
+    for (const ra of RARITIES) { r -= ra.weight; if (r < 0) return ra; }
+    return RARITIES[RARITIES.length - 1];
+  },
+  hitCrate(cr, fromX) {
+    cr.hp--; cr.flash = 6; cr.dir = (cr.x >= fromX) ? 1 : -1;
+    this.spark(cr.x, cr.y + 20);
+    if (cr.hp > 0) { this.shake = Math.max(this.shake, 3); return; }
+    cr.alive = false;                       // ломаем: щепки + монета
+    this.shake = Math.max(this.shake, 7);
+    for (let i = 0; i < 10; i++) {
+      this.chips.push({ x: cr.x + (Math.random() - 0.5) * 50,
+        y: cr.y + 14 + Math.random() * 40,
+        vx: (Math.random() - 0.5) * 6, vy: -2 - Math.random() * 4,
+        t: 0, c: (i % 2) ? "#c78757" : "#7a4e28" });
+    }
+    const rar = this.rollRarity();
+    this.coinDrops.push({ x: cr.x, y: cr.y + 20, vx: (Math.random() - 0.5) * 2,
+                          vy: -6.5, rar: rar, t: 0, alive: true });
+    this.floater(cr.x - camera.x, cr.y - 6, rar.name + "!", rar.color);
+    if (rar.coins >= 20) {                  // фейерверк для топ-редкостей
+      for (let i = 0; i < 8; i++)
+        this.spark(cr.x + (Math.random() - 0.5) * 70,
+                   cr.y + (Math.random() - 0.5) * 60);
+    }
   },
   floater(x, y, txt, color) {
     this.floaters.push({ x: x, y: y, txt: txt, color: color, t: 0 });
@@ -1510,6 +1654,57 @@ const world = {
   spark(x, y) { this.sparks.push({ x: x, y: y, t: 0 }); },
 
   update() {
+    /* ящики: спавн и падение; монеты: физика и подбор (v0.6) */
+    if (game.mode === "play") {
+      if (this.crateTimer > 0) this.crateTimer--;
+      if (this.crateTimer <= 0 && this.crates.length < 2) {
+        this.spawnCrate();
+        this.crateTimer = CRATE_GAP[0] +
+          Math.floor(Math.random() * (CRATE_GAP[1] - CRATE_GAP[0]));
+      }
+    }
+    for (const cr of this.crates) {
+      if (cr.flash > 0) cr.flash--;
+      if (!cr.landed) {
+        cr.vy += 0.6; cr.y += cr.vy;
+        const rest = GROUND - CR_GH * CR_S + 4;
+        if (cr.y >= rest) {
+          cr.y = rest; cr.landed = true;
+          this.shake = Math.max(this.shake, 3);
+          this.spark(cr.x - 26, GROUND - 6); this.spark(cr.x + 26, GROUND - 6);
+        }
+      }
+    }
+    this.crates = this.crates.filter(c => c.alive);
+    for (const cd of this.coinDrops) {
+      cd.t++;
+      cd.vy += 0.45; cd.y += cd.vy; cd.x += cd.vx;
+      if (cd.x < ARENA.left) cd.x = ARENA.left;
+      if (cd.x > ARENA.right) cd.x = ARENA.right;
+      if (cd.y > GROUND - 10) {
+        cd.y = GROUND - 10;
+        if (Math.abs(cd.vy) > 1.4) { cd.vy = -cd.vy * 0.45; }
+        else { cd.vy = 0; cd.vx = 0; }
+      }
+      if (cd.t > 720) cd.alive = false;     // ~12 с — и монета исчезает
+      const cbox = { x: cd.x - 12, y: cd.y - 12, w: 24, h: 24 };
+      for (const f of this.fighters) {
+        if (!cd.alive || !f.ctrl.human) continue;   // ИИ монеты не берёт
+        if (this.overlap(cbox, f.hurtbox())) {
+          cd.alive = false;
+          profile.coins += cd.rar.coins; saveProfile();
+          this.floater(cd.x - camera.x, cd.y - 26,
+            "+" + cd.rar.coins + (cd.rar.coins === 1 ? " монета" :
+              cd.rar.coins === 3 ? " монеты" : " монет"), cd.rar.color);
+          this.spark(cd.x, cd.y);
+        }
+      }
+    }
+    this.coinDrops = this.coinDrops.filter(c => c.alive);
+    for (const ch of this.chips) {
+      ch.t++; ch.vy += 0.5; ch.x += ch.vx; ch.y += ch.vy;
+    }
+    this.chips = this.chips.filter(c => c.t < 30 && c.y < GROUND + 10);
     for (const pj of this.projectiles) {
       pj.t++; pj.x += pj.vx;
       if (pj.x < -40 || pj.x > W + 40) pj.alive = false;
@@ -1542,7 +1737,37 @@ const world = {
       if (R.x - L.x > 820) { L.x += 1.4; R.x -= 1.4; }
     }
   },
+  drawBack() {                        // ящики — за спинами бойцов
+    for (const cr of this.crates) {
+      if (cr.landed) {
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.beginPath();
+        ctx.ellipse(cr.x, GROUND + 6, 34, 7, 0, 0, 7);
+        ctx.fill();
+      }
+      const wob = (cr.flash > 0) ? cr.dir * ((cr.flash % 2) ? 2 : -2) : 0;
+      ctx.drawImage((cr.flash > 0) ? CRATE_WHITE : CRATE_IMG,
+        cr.x - CR_GW * CR_S / 2 + wob, cr.y, CR_GW * CR_S, CR_GH * CR_S);
+    }
+  },
   draw() {
+    for (const cd of this.coinDrops) {          // монеты из ящиков
+      if (cd.t > 600 && Math.floor(cd.t / 5) % 2) continue;   // мигает
+      ctx.globalAlpha = 0.22 + 0.12 * Math.sin(cd.t * 0.18);
+      ctx.fillStyle = cd.rar.color;
+      ctx.beginPath(); ctx.arc(cd.x, cd.y, 17, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.save();
+      ctx.translate(cd.x, cd.y);
+      const sx = Math.cos(cd.t * 0.1) || 0.05;  // монетка крутится
+      ctx.scale(sx, 1);
+      ctx.drawImage(cd.rar.img, -10, -10, 21, 21);
+      ctx.restore();
+    }
+    for (const ch of this.chips) {              // щепки
+      ctx.fillStyle = ch.c;
+      ctx.fillRect(ch.x - 2, ch.y - 2, 4, 4);
+    }
     for (const pj of this.projectiles) {
       if (pj.kind === "shuriken") {
         const img = SHU_IMG[Math.floor(pj.t / 4) % 2];
@@ -1598,6 +1823,9 @@ const game = {
     this.p1.weapon = profile.equipped;
     this.p2.weapon = this.vsMode ? profile.equipped2 : DIFFS[profile.difficulty].weapon;
     world.projectiles = []; world.sparks = []; world.floaters = [];
+    world.crates = []; world.coinDrops = []; world.chips = [];
+    world.crateTimer = CRATE_FIRST[0] +
+      Math.floor(Math.random() * (CRATE_FIRST[1] - CRATE_FIRST[0]));
     clearPads();
     this.mode = "intro"; this.timer = 70;
   },
@@ -1810,6 +2038,7 @@ const game = {
       ctx.fillStyle = (this.wins[1] > i) ? "#e8c15a" : "#3a3c58";
       ctx.fillRect(W / 2 + 26 + i * 22, 28, 14, 14);
     }
+    this.drawCoins(W / 2 - 34, 48);   // кошелёк виден прямо в бою
   },
 
   drawMarker(f, color) {
@@ -1848,7 +2077,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.5b · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.6 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -1978,6 +2207,7 @@ const game = {
 
     ctx.save();
     ctx.translate(-camera.x, 0);      // мир под камерой
+    world.drawBack();                 // ящики — позади бойцов
     this.p2.draw();
     this.p1.draw();
     world.draw();
@@ -2015,6 +2245,7 @@ function loop(now) {
   acc += Math.min(100, now - last);
   last = now;
   while (acc >= STEP) { game.tick(); acc -= STEP; }
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // HiDPI-масштаб (v0.6)
   ctx.imageSmoothingEnabled = false;
   game.draw();
   requestAnimationFrame(loop);
