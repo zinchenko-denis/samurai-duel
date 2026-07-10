@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.11 — проект Пети
+   SAMURAI DUEL v0.12 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -861,14 +861,18 @@ const OUTFITS = [   /* костюмы Наруто (одежда, волосы �
   { name:"ЗЕЛЁНЫЙ",   a:"#3fa050", b:"#287038", c:"#70d080", p:"#2c5838" },
 ];
 /* герои (v0.7): голова-причёска + цвет волос; hook — фирменный крюк */
-const HEROES = [
-  { name:"НАРУТО",    head:"naruto",  hair:"#f8e040" },
-  { name:"РОНИН",     head:"ronin",   hair:"#2c2836" },
-  { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a" },
-  { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true },
-  { name:"СЁГУН",     head:"shogun",  hair:"#232030" },
-  { name:"ОНИ",       head:"oni",     hair:"#b8302c" },
-  { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4" },
+const HEROES = [   /* у каждого свой цвет тела и телосложение (v0.12) */
+  { name:"НАРУТО",    head:"naruto",  hair:"#f8e040", bx:1.00, by:1.00 },
+  { name:"РОНИН",     head:"ronin",   hair:"#2c2836", bx:0.97, by:1.03 },
+  { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a", bx:0.90, by:1.00,
+    body:{ s:"#f0d2b2", d:"#d2ac86" } },
+  { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true, bx:1.10, by:1.00,
+    body:{ s:"#5aa050", d:"#3a7038" } },
+  { name:"СЁГУН",     head:"shogun",  hair:"#232030", bx:1.12, by:1.05 },
+  { name:"ОНИ",       head:"oni",     hair:"#b8302c", bx:1.16, by:1.08,
+    body:{ s:"#d0463a", d:"#a02c28" } },
+  { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4", bx:1.18, by:0.98,
+    body:{ s:"#e8e8ee", d:"#c0c0cc" } },
 ];
 const PAL = {
   p1: Object.assign({}, BASE, { h:"#f8e040" }, OUTFITS[0]),
@@ -974,7 +978,7 @@ function applyOutfit() {   // облик игрока 1: герой + костю
   const hr = HEROES[profile.hero], sk = SKIN_FX[profile.skin] || SKIN_FX[0];
   const cols = sk.fx ? sk : OUTFITS[profile.outfit];
   const hair = (sk.fx && sk.h) ? sk.h : hr.hair;
-  PAL.p1 = Object.assign({}, BASE, { h: hair }, cols);
+  PAL.p1 = Object.assign({}, BASE, hr.body || {}, { h: hair }, cols);
   SKINS.p1[1] = hr.head;
   buildSkin("p1");
 }
@@ -982,7 +986,7 @@ function applyOutfit2() {  // облик игрока 2: герой + костю
   const hr = HEROES[profile.hero2], sk = SKIN_FX[profile.skin2] || SKIN_FX[0];
   const cols = sk.fx ? sk : OUTFITS[profile.outfit2];
   const hair = (sk.fx && sk.h) ? sk.h : hr.hair;
-  PAL.p2c = Object.assign({}, BASE, { h: hair }, cols);
+  PAL.p2c = Object.assign({}, BASE, hr.body || {}, { h: hair }, cols);
   SKINS.p2c[1] = hr.head;
   buildSkin("p2c");
 }
@@ -1029,7 +1033,7 @@ function heroPreview(hi, oi) {
   const key = hi + ":" + oi;
   if (HERO_PREV[key]) return HERO_PREV[key];
   const hr = HEROES[hi];
-  const pal = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[oi]);
+  const pal = Object.assign({}, BASE, hr.body || {}, { h: hr.hair }, OUTFITS[oi]);
   const img = renderGrid(RAW.idle, pal, GW, GH);
   const head = HEADS[hr.head];
   if (head) {
@@ -1463,7 +1467,7 @@ class Fighter {
   constructor(x, palName, name, ctrl) {
     this.pal = palName; this.name = name; this.ctrl = ctrl;
     this.weapon = "fist"; this.hook = false;
-    this.maxHp = HP_MAX; this.dmgMul = 1;
+    this.maxHp = HP_MAX; this.dmgMul = 1; this.bx = 1; this.by = 1;
     this.reset(x, 1);
   }
   reset(x, facing) {
@@ -1745,6 +1749,10 @@ class Fighter {
     ctx.save();
     ctx.translate(this.x, GROUND - GH * S + bob + this.yOff);
     if (this.facing < 0) ctx.scale(-1, 1);
+    const _bx = this.bx || 1, _by = this.by || 1;   // телосложение героя (v0.12)
+    if (_bx !== 1 || _by !== 1) {
+      ctx.translate(0, GH * S); ctx.scale(_bx, _by); ctx.translate(0, -GH * S);
+    }
     ctx.drawImage(img, -ANCHOR_X * S, 0, GW * S, GH * S);
     if (this.state === ST.BLOCK) {   // мерцание щита
       ctx.globalAlpha = 0.22 + 0.14 * Math.sin(this.t * 0.5);
@@ -2133,6 +2141,10 @@ const game = {
     this.p2.pal  = this.vsMode ? "p2c" : "p2";
     this.p1.hook = !!HEROES[profile.hero].hook;
     this.p2.hook = this.vsMode && !!HEROES[profile.hero2].hook;
+    this.p1.bx = HEROES[profile.hero].bx || 1;
+    this.p1.by = HEROES[profile.hero].by || 1;
+    this.p2.bx = this.vsMode ? (HEROES[profile.hero2].bx || 1) : 1.02;
+    this.p2.by = this.vsMode ? (HEROES[profile.hero2].by || 1) : 0.96;
     this.newRound();
   },
   newRound() {
@@ -2516,8 +2528,9 @@ const game = {
       ctx.strokeStyle = sel ? "#e8c15a" : (i === cur ? "#7ec8ff" : "#3a3c58");
       ctx.lineWidth = sel ? 3 : 2;
       ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      const cw = GW * 3 * (h.bx || 1);
       ctx.drawImage(heroPreview(i, oi),
-                    r.x + (r.w - GW * 3) / 2, r.y + 6, GW * 3, GH * 3);
+                    r.x + (r.w - cw) / 2, r.y + 6, cw, GH * 3);
       ctx.font = "bold 14px 'Courier New', monospace"; ctx.textAlign = "center";
       ctx.fillStyle = sel ? "#e8c15a" : "#f2ead8";
       ctx.fillText(h.name, r.x + r.w / 2, r.y + r.h - 28);
@@ -2581,7 +2594,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.11 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.12 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
