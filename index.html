@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.9 — проект Пети
+   SAMURAI DUEL v0.10 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -958,15 +958,30 @@ function buildSkin(key) {
   }
 }
 for (const key in SKINS) buildSkin(key);
-function applyOutfit() {   // облик игрока 1: герой + костюм (v0.7)
-  const hr = HEROES[profile.hero];
-  PAL.p1 = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[profile.outfit]);
+/* ---------- СКИНЫ С ЭФФЕКТАМИ (v0.10) -----------------------
+   Скин перекрашивает броню и волосы и даёт свечение-ауру в бою.
+   fx:null — скина нет, берётся цвет из ОДЕЖДЫ. */
+const SKIN_FX = [
+  { name:"ОБЫЧНЫЙ", fx:null },
+  { name:"ЭЛЕКТРО", a:"#40e0ff", b:"#1878b0", c:"#d8ffff", p:"#186888", h:"#a0f0ff", fx:"electric" },
+  { name:"КОСМОС",  a:"#6a44b0", b:"#2a1c58", c:"#b088ff", p:"#1a1040", h:"#c0a0ff", fx:"cosmic" },
+  { name:"ОГОНЬ",   a:"#ff6a28", b:"#c03010", c:"#ffc040", p:"#802010", h:"#ffa040", fx:"fire" },
+  { name:"ЗОЛОТО",  a:"#ffd23a", b:"#c08810", c:"#fff0a0", p:"#8a6008", h:"#ffe860", fx:"gold" },
+  { name:"ТЕНЬ",    a:"#3a3050", b:"#1a1428", c:"#6a5a90", p:"#140f22", h:"#5a4a78", fx:"shadow" },
+];
+function applyOutfit() {   // облик игрока 1: герой + костюм/скин (v0.10)
+  const hr = HEROES[profile.hero], sk = SKIN_FX[profile.skin] || SKIN_FX[0];
+  const cols = sk.fx ? sk : OUTFITS[profile.outfit];
+  const hair = (sk.fx && sk.h) ? sk.h : hr.hair;
+  PAL.p1 = Object.assign({}, BASE, { h: hair }, cols);
   SKINS.p1[1] = hr.head;
   buildSkin("p1");
 }
-function applyOutfit2() {  // облик игрока 2
-  const hr = HEROES[profile.hero2];
-  PAL.p2c = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[profile.outfit2]);
+function applyOutfit2() {  // облик игрока 2: герой + костюм/скин (v0.10)
+  const hr = HEROES[profile.hero2], sk = SKIN_FX[profile.skin2] || SKIN_FX[0];
+  const cols = sk.fx ? sk : OUTFITS[profile.outfit2];
+  const hair = (sk.fx && sk.h) ? sk.h : hr.hair;
+  PAL.p2c = Object.assign({}, BASE, { h: hair }, cols);
   SKINS.p2c[1] = hr.head;
   buildSkin("p2c");
 }
@@ -1386,6 +1401,8 @@ if (profile.outfit === undefined || profile.outfit >= OUTFITS.length) profile.ou
 if (profile.hero === undefined || profile.hero >= HEROES.length) profile.hero = 0;
 if (profile.hero2 === undefined || profile.hero2 >= HEROES.length) profile.hero2 = 3;
 if (!profile.power) profile.power = { pts: 0, hp: 0, dmg: 0 };
+if (profile.skin === undefined || profile.skin >= SKIN_FX.length) profile.skin = 0;
+if (profile.skin2 === undefined || profile.skin2 >= SKIN_FX.length) profile.skin2 = 0;
 if (profile.outfit2 === undefined || profile.outfit2 >= OUTFITS.length) profile.outfit2 = 3;
 if (profile.equipped2 === undefined ||
     (profile.equipped2 !== "hook" && !WEAPONS[profile.equipped2])) profile.equipped2 = "hook";
@@ -1624,6 +1641,73 @@ class Fighter {
     return "idle";
   }
 
+  drawAura(front) {                  // свечение/частицы скина (v0.10)
+    if (!this.fx) return;
+    const cx = this.x, cy = GROUND - 82 + this.yOff, t = this.t;
+    if (this.fx === "electric") {
+      if (!front) {
+        ctx.fillStyle = "rgba(70,200,255,0.16)";
+        ctx.beginPath(); ctx.ellipse(cx, cy, 40, 60, 0, 0, 7); ctx.fill();
+      } else {
+        ctx.strokeStyle = "rgba(170,240,255,0.95)"; ctx.lineWidth = 2;
+        for (let i = 0; i < 3; i++) {
+          if ((t + i * 5) % 8 >= 3) continue;
+          const a = t * 0.5 + i * 2.1;
+          let x = cx + Math.cos(a) * 34, y = cy + Math.sin(a) * 50;
+          ctx.beginPath(); ctx.moveTo(x, y);
+          for (let s = 0; s < 3; s++) {
+            x += ((t * 7 + i * 13 + s * 5) % 11) - 5; y += 7; ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+      }
+    } else if (this.fx === "cosmic") {
+      if (!front) {
+        ctx.fillStyle = "rgba(150,90,230,0.18)";
+        ctx.beginPath(); ctx.ellipse(cx, cy, 42, 62, 0, 0, 7); ctx.fill();
+      } else {
+        for (let i = 0; i < 8; i++) {
+          const a = t * 0.03 + i * 0.85, rr = 32 + (i % 3) * 9;
+          const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a * 1.3) * rr * 0.9;
+          let tw = 0.4 + 0.6 * Math.sin(t * 0.2 + i); if (tw < 0) tw = 0;
+          ctx.fillStyle = "rgba(224,204,255," + tw.toFixed(2) + ")";
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+          if (tw > 0.85) { ctx.fillRect(x - 3, y, 6, 1); ctx.fillRect(x, y - 3, 1, 6); }
+        }
+      }
+    } else if (this.fx === "fire") {
+      if (front) {
+        for (let i = 0; i < 7; i++) {
+          const ph = ((t * 3 + i * 34) % 120) / 120;
+          const x = cx + (((i * 37) % 44) - 22) * (1 - ph * 0.4);
+          const y = GROUND + this.yOff - ph * 92, sz = 5 * (1 - ph) + 1.5;
+          ctx.fillStyle = ph < 0.5 ? "rgba(255,170,40,0.9)" : "rgba(255,80,20,0.7)";
+          ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+        }
+      }
+    } else if (this.fx === "gold") {
+      if (!front) {
+        ctx.fillStyle = "rgba(255,210,70,0.16)";
+        ctx.beginPath(); ctx.ellipse(cx, cy, 40, 60, 0, 0, 7); ctx.fill();
+      } else {
+        for (let i = 0; i < 5; i++) {
+          const a = t * 0.07 + i * 1.3;
+          const x = cx + Math.cos(a) * 36, y = cy + Math.sin(a) * 52;
+          if (Math.sin(t * 0.25 + i * 2) > 0.5) {
+            ctx.fillStyle = "#fff0a0";
+            ctx.fillRect(x - 4, y, 8, 1); ctx.fillRect(x, y - 4, 1, 8);
+          }
+        }
+      }
+    } else if (this.fx === "shadow") {
+      if (!front) {
+        ctx.fillStyle = "rgba(30,10,50,0.32)";
+        ctx.beginPath(); ctx.ellipse(cx, cy, 44, 64, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = "rgba(90,50,130,0.22)";
+        ctx.beginPath(); ctx.ellipse(cx, cy, 30, 48, 0, 0, 7); ctx.fill();
+      }
+    }
+  }
   draw() {
     // мигание при неуязвимости после подъёма
     if (this.invuln > 0 && Math.floor(this.t / 3) % 2 === 0 &&
@@ -1637,6 +1721,7 @@ class Fighter {
     ctx.beginPath();
     ctx.ellipse(this.x, GROUND + 6, 34 * sk, 8 * sk, 0, 0, 7);
     ctx.fill();
+    this.drawAura(false);            // свечение скина за спиной
     // спрайт с якорем и отражением
     ctx.save();
     ctx.translate(this.x, GROUND - GH * S + bob + this.yOff);
@@ -1663,6 +1748,7 @@ class Fighter {
       ctx.drawImage(HOOK_IMG, -10, -10, 21, 21);
       ctx.restore();
     }
+    this.drawAura(true);             // искры скина поверх бойца
   }
 }
 
@@ -2036,6 +2122,8 @@ const game = {
     this.p1.dmgMul = 1 + pw.dmg * 0.08;
     this.p2.maxHp = this.vsMode ? this.p1.maxHp : HP_MAX;
     this.p2.dmgMul = this.vsMode ? this.p1.dmgMul : 1;
+    this.p1.fx = SKIN_FX[profile.skin].fx;
+    this.p2.fx = this.vsMode ? SKIN_FX[profile.skin2].fx : null;
     this.p1.reset(620, 1); this.p2.reset(1300, -1);
     const sane = (eq, hero) => (eq === "hook" &&
       profile.owned.indexOf("hook") < 0 && !HEROES[hero].hook) ? "fist" : eq;
@@ -2056,6 +2144,7 @@ const game = {
             "ГЕРОИ: " + HEROES[profile.hero].name + " · " + HEROES[profile.hero2].name,
             "МАГАЗИН", "ПРОКАЧКА", "КУБКИ",
             "ОДЕЖДА: " + OUTFITS[profile.outfit].name,
+            "СКИНЫ: " + SKIN_FX[profile.skin].name,
             "СЛОЖНОСТЬ: " + DIFFS[profile.difficulty].name,
             "КАРТА: " + (profile.arena < THEMES.length
                          ? THEMES[profile.arena].name : "СЛУЧАЙНАЯ")];
@@ -2088,7 +2177,7 @@ const game = {
       if (ev.type === "up")   this.menuSel = (this.menuSel + n - 1) % n;
       if (ev.type === "down") this.menuSel = (this.menuSel + 1) % n;
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 176, 33, n);
+        const hit = this.rowAt(ev.y, 172, 30, n);
         if (hit < 0) return;
         this.menuSel = hit; ev = { type: "ok" };
       }
@@ -2101,6 +2190,10 @@ const game = {
         else if (this.menuSel === 5) this.mode = "cups";
         else if (this.menuSel === 6) { this.mode = "outfit"; this.outfitSel = profile.outfit; }
         else if (this.menuSel === 7) {
+          this.mode = "skins"; this.skinSel = profile.skin;
+          this.skinFor = this.skinFor || 0;
+        }
+        else if (this.menuSel === 8) {
           profile.difficulty = (profile.difficulty + 1) % DIFFS.length;
           saveProfile();
         } else {
@@ -2124,6 +2217,23 @@ const game = {
         if (this.outfitSel === OUTFITS.length + 1) { this.mode = "menu"; return; }
         if (this.outfitFor === 0) { profile.outfit = this.outfitSel - 1; applyOutfit(); }
         else { profile.outfit2 = this.outfitSel - 1; applyOutfit2(); }
+        saveProfile();
+      }
+    } else if (this.mode === "skins") {
+      const n = SKIN_FX.length + 2;
+      if (ev.type === "up")   this.skinSel = (this.skinSel + n - 1) % n;
+      if (ev.type === "down") this.skinSel = (this.skinSel + 1) % n;
+      if (ev.type === "back") { this.mode = "menu"; return; }
+      if (ev.type === "click") {
+        const hit = this.rowAt(ev.y, 120, 40, n);
+        if (hit < 0) return;
+        this.skinSel = hit; ev = { type: "ok" };
+      }
+      if (ev.type === "ok") {
+        if (this.skinSel === 0) { this.skinFor = 1 - this.skinFor; return; }
+        if (this.skinSel === SKIN_FX.length + 1) { this.mode = "menu"; return; }
+        if (this.skinFor === 0) { profile.skin = this.skinSel - 1; applyOutfit(); }
+        else { profile.skin2 = this.skinSel - 1; applyOutfit2(); }
         saveProfile();
       }
     } else if (this.mode === "heroes") {
@@ -2218,7 +2328,8 @@ const game = {
 
     if (this.mode === "menu" || this.mode === "shop" ||
         this.mode === "cups" || this.mode === "outfit" ||
-        this.mode === "heroes" || this.mode === "power") return;
+        this.mode === "skins" || this.mode === "heroes" ||
+        this.mode === "power") return;
     if (this.mode === "intro") {
       if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
       return;
@@ -2439,19 +2550,19 @@ const game = {
     ctx.fillRect(0, 0, W, H);
     this.banner("SAMURAI DUEL", 56, 140);
     const items = this.menuItems();
-    ctx.font = "bold 25px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.font = "bold 23px 'Courier New', monospace"; ctx.textAlign = "center";
     for (let i = 0; i < items.length; i++) {
       ctx.fillStyle = (i === this.menuSel) ? "#e8c15a" : "#f2ead8";
       ctx.fillText((i === this.menuSel ? "▶ " : "") + items[i] +
-                   (i === this.menuSel ? " ◀" : ""), W / 2, 176 + i * 33);
+                   (i === this.menuSel ? " ◀" : ""), W / 2, 172 + i * 30);
     }
-    this.drawStatus(456);
+    this.drawStatus(462);
     ctx.font = "14px 'Courier New', monospace";
     ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.9 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.10 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2498,6 +2609,40 @@ const game = {
     ctx.font = "15px 'Courier New', monospace";
     ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
     ctx.fillText("ENTER — надеть · ESC — назад", W / 2, yb + 40);
+    world.drawFloaters();
+  },
+
+  drawSkins() {
+    ctx.fillStyle = "rgba(8,8,20,0.82)"; ctx.fillRect(0, 0, W, H);
+    this.banner("СКИНЫ", 50, 80);
+    const cur = this.skinFor === 0 ? profile.skin : profile.skin2;
+    const y0 = 120, step = 40;
+    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = (this.skinSel === 0) ? "#e8c15a" : "#7ec8ff";
+    ctx.fillText((this.skinSel === 0 ? "▶ " : "  ") + "СКИН ДЛЯ: ИГРОК " +
+                 (this.skinFor + 1) + " ⇄", W / 2 - 250, y0);
+    for (let i = 0; i < SKIN_FX.length; i++) {
+      const y = y0 + (i + 1) * step, sk = SKIN_FX[i];
+      ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "left";
+      ctx.fillStyle = (i + 1 === this.skinSel) ? "#e8c15a"
+                    : sk.fx ? sk.a : "#f2ead8";
+      ctx.fillText((i + 1 === this.skinSel ? "▶ " : "  ") + sk.name, W / 2 - 250, y);
+      if (i === cur) {
+        ctx.fillStyle = "#7ec8ff"; ctx.font = "bold 16px 'Courier New', monospace";
+        ctx.fillText("ВЫБРАН", W / 2 - 40, y);
+      }
+    }
+    const yb = y0 + (SKIN_FX.length + 1) * step;
+    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = (this.skinSel === SKIN_FX.length + 1) ? "#e8c15a" : "#f2ead8";
+    ctx.fillText((this.skinSel === SKIN_FX.length + 1 ? "▶ " : "  ") + "НАЗАД", W / 2 - 250, yb);
+    ctx.drawImage(FRAMES[this.skinFor === 0 ? "p1" : "p2c"].idle.img,
+                  W / 2 + 150, 150, GW * 6, GH * 6);
+    ctx.font = "14px 'Courier New', monospace";
+    ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
+    ctx.fillText("скин красит бойца и даёт свечение в бою · ОБЫЧНЫЙ = цвет из ОДЕЖДЫ",
+                 W / 2, H - 26);
+    ctx.fillText("ENTER — выбрать · ESC — назад", W / 2, H - 8);
     world.drawFloaters();
   },
 
@@ -2604,6 +2749,7 @@ const game = {
     if (this.mode === "shop")   { this.drawShop();   ctx.restore(); return; }
     if (this.mode === "cups")   { this.drawCups();   ctx.restore(); return; }
     if (this.mode === "outfit") { this.drawOutfit(); ctx.restore(); return; }
+    if (this.mode === "skins")  { this.drawSkins();  ctx.restore(); return; }
 
     ctx.save();                       // мир: камера + «наезд» (v0.8)
     ctx.translate(W / 2, ZOOM_CY);
