@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.12 — проект Пети
+   SAMURAI DUEL v0.13 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1623,6 +1623,7 @@ class Fighter {
       return true;
     }
     this.hp = Math.max(0, this.hp - a.dmg);
+    game.hitStop = Math.max(game.hitStop || 0, a.knockdown ? 7 : 4);
     world.floater(this.x, GROUND - 172, "-" + a.dmg, "#ff6a5e", true);
     this.flash = 5;
     const dir = (this.x >= fromX) ? 1 : -1;
@@ -1855,7 +1856,7 @@ class AIController {
    МИР: снаряды, искры, проверка попаданий, тряска экрана.
    ============================================================ */
 const world = {
-  fighters: [], projectiles: [], sparks: [], floaters: [], shake: 0,
+  fighters: [], projectiles: [], sparks: [], floaters: [], rings: [], shake: 0,
   crates: [], coinDrops: [], chips: [], crateTimer: 300,
   opponent(f) { return (f === this.fighters[0]) ? this.fighters[1] : this.fighters[0]; },
   overlap(A, B) {
@@ -1884,7 +1885,7 @@ const world = {
         ? Object.assign({}, a, { dmg: Math.round(a.dmg * attacker.dmgMul) }) : a;
       const hit = defender.applyHit(eff, attacker.x);
       if (hit) {
-        this.spark(defender.x + defender.facing * -10, GROUND - a.box.fy - 10);
+        this.impact(defender.x + defender.facing * -10, GROUND - a.box.fy - 10, a.knockdown);
         this.shake = a.knockdown ? 10 : 6;
       }
     }
@@ -1962,6 +1963,13 @@ const world = {
     }
   },
   spark(x, y) { this.sparks.push({ x: x, y: y, t: 0 }); },
+  impact(x, y, big) {                    // вспышка-кольцо + искры (v0.13)
+    this.rings.push({ x: x, y: y, t: 0, max: big ? 46 : 30 });
+    const n = big ? 12 : 7;
+    for (let i = 0; i < n; i++)
+      this.sparks.push({ x: x + (Math.random() - 0.5) * 22,
+                         y: y + (Math.random() - 0.5) * 22, t: 0 });
+  },
 
   update() {
     /* ящики: спавн и падение; монеты: физика и подбор (v0.6) */
@@ -2027,7 +2035,7 @@ const world = {
         const fake = { dmg: Math.round(pr.dmg * pj.owner.dmgMul),
                        kb: pr.kb, stun: pr.stun, knockdown: false };
         if (target.applyHit(fake, pj.x - pj.vx * 4)) {
-          this.spark(pj.x, pj.y);
+          this.impact(pj.x, pj.y, false);
           this.shake = 4;
         }
         pj.alive = false;
@@ -2036,6 +2044,8 @@ const world = {
     this.projectiles = this.projectiles.filter(s => s.alive);
     for (const sp of this.sparks) sp.t++;
     this.sparks = this.sparks.filter(s => s.t < 8);
+    for (const rg of this.rings) rg.t++;
+    this.rings = this.rings.filter(r => r.t < 14);
     if (this.shake > 0) this.shake--;
     // тела не проходят друг сквозь друга
     const [a, b] = this.fighters;
@@ -2100,6 +2110,12 @@ const world = {
         else ctx.drawImage(KUNAI_IMG, -12, -4, 24, 9);
         ctx.restore();
       }
+    }
+    for (const rg of this.rings) {
+      const p = rg.t / 14, rad = rg.max * p;
+      ctx.strokeStyle = "rgba(255,240,180," + (1 - p).toFixed(2) + ")";
+      ctx.lineWidth = 3 * (1 - p) + 1;
+      ctx.beginPath(); ctx.arc(rg.x, rg.y, rad, 0, 7); ctx.stroke();
     }
     for (const sp of this.sparks) {
       const r = 4 + sp.t * 2.2;
@@ -2358,6 +2374,8 @@ const game = {
         this.mode === "cups" || this.mode === "outfit" ||
         this.mode === "skins" || this.mode === "heroes" ||
         this.mode === "power") return;
+    if (this.flash > 0) this.flash -= 0.05;
+    if (this.hitStop > 0) { this.hitStop--; return; }   // микро-заморозка удара
     if (this.mode === "intro") {
       if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
       return;
@@ -2376,7 +2394,7 @@ const game = {
     if (this.mode === "play") {
       const dead1 = this.p1.state === ST.KO, dead2 = this.p2.state === ST.KO;
       if (dead1 || dead2) {
-        this.mode = "ko"; this.timer = 120;
+        this.mode = "ko"; this.timer = 120; this.flash = 0.75;
         if (dead1 && dead2) this.msg = "НИЧЬЯ";
         else if (dead2) {
           this.wins[0]++; this.msg = this.p1.name + " ПОБЕЖДАЕТ";
@@ -2425,6 +2443,52 @@ const game = {
     ctx.fillText(String(profile.coins), x + 28, y + 18);
   },
 
+  drawVignette() {                       // мягкое затемнение краёв (v0.13)
+    const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.34, W / 2, H / 2, H * 0.80);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,0,0,0.40)");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  },
+  drawAmbient() {                        // частицы атмосферы под карту (v0.13)
+    if (!this.ambient) this.ambient = [];
+    const th = THEMES[this.arenaIdx] || THEMES[0];
+    const night = this.isNight();
+    let target = 26, mode = "dust";
+    if (th.decor === "bamboo") { mode = "leaf"; target = 28; }
+    else if (th.decor === "snow") { mode = "snow"; target = 44; }
+    else if (th.decor === "volcano") { mode = "ember"; target = 36; }
+    else if (th.decor === "cactus") { mode = "sand"; target = 30; }
+    else if (th.decor === "city") { mode = night ? "firefly" : "dust"; target = 30; }
+    while (this.ambient.length < target)
+      this.ambient.push({ x: Math.random() * W, y: Math.random() * H,
+                          s: Math.random(), m: mode });
+    while (this.ambient.length > target) this.ambient.pop();
+    for (const p of this.ambient) {
+      if (p.m !== mode) { p.m = mode; p.x = Math.random() * W; p.y = Math.random() * H; }
+      if (mode === "snow") { p.x += Math.sin((p.y + p.s * 90) * 0.02) * 0.5; p.y += 0.8 + p.s; }
+      else if (mode === "leaf") { p.x += Math.sin(p.y * 0.03) * 0.9 - 0.3; p.y += 0.5 + p.s * 0.7; }
+      else if (mode === "ember") { p.x += Math.sin(p.y * 0.05) * 0.6; p.y -= 0.7 + p.s; }
+      else if (mode === "sand") { p.x += 1.6 + p.s; p.y += Math.sin(p.x * 0.02) * 0.3; }
+      else if (mode === "firefly") { p.x += Math.sin(p.y * 0.05 + p.s * 6) * 0.5; p.y += Math.cos(p.x * 0.05) * 0.4; }
+      else { p.x += 0.25; p.y -= 0.05; }
+      if (p.y > H + 12) { p.y = -12; p.x = Math.random() * W; }
+      if (p.y < -12) { p.y = H + 12; p.x = Math.random() * W; }
+      if (p.x > W + 12) p.x = -12;
+      if (p.x < -12) p.x = W + 12;
+      let col, sz;
+      if (mode === "snow") { col = "rgba(240,246,255,0.85)"; sz = 2 + p.s * 2; }
+      else if (mode === "leaf") { col = "rgba(120,175,80,0.70)"; sz = 3 + p.s * 2; }
+      else if (mode === "ember") {
+        const a = (0.35 + 0.5 * Math.sin(p.y * 0.1 + p.s * 10)).toFixed(2);
+        col = "rgba(255,150,45," + a + ")"; sz = 2 + p.s * 2;
+      } else if (mode === "sand") { col = "rgba(220,190,130,0.38)"; sz = 1 + p.s * 2; }
+      else if (mode === "firefly") {
+        const a = (0.25 + 0.6 * Math.abs(Math.sin(p.y * 0.1 + p.s * 8))).toFixed(2);
+        col = "rgba(255,232,120," + a + ")"; sz = 2 + p.s * 2;
+      } else { col = "rgba(220,220,240,0.14)"; sz = 1 + p.s * 2; }
+      ctx.fillStyle = col; ctx.fillRect(p.x, p.y, sz, sz);
+    }
+  },
   drawHUD() {
     const bw = 380, bh = 22;
     ctx.fillStyle = "#191722";
@@ -2594,7 +2658,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.12 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.13 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2808,11 +2872,17 @@ const game = {
     this.p1.draw();
     world.draw();
     ctx.restore();
+    this.drawVignette();
+    this.drawAmbient();
     this.drawMarker(this.p1, "#ffd84a");   // стрелки-указатели
     this.drawMarker(this.p2, "#ff7a5c");
     world.drawFloaters();
     this.drawHUD();
     if (TOUCH_ON && FIGHT_MODES[this.mode]) this.drawTouchUI();
+    if (this.flash > 0) {
+      ctx.fillStyle = "rgba(255,255,255," + Math.min(0.85, this.flash).toFixed(2) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
 
     if (this.mode === "intro") {
       this.banner("РАУНД " + this.round, 64, 260);
