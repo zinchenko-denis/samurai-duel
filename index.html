@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.7 — проект Пети
+   SAMURAI DUEL v0.8 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -37,7 +37,7 @@ const COIN_ROUND  = 10;        // монет за выигранный раун�
 const COIN_MATCH  = 20;        // бонус за победу в матче
 const CYCLE_LEN   = 4200;      // длина «суток» в тиках (~70 секунд)
 const WORLD_W     = 1920;      // ширина карты — два экрана
-const camera = { x: 0 };
+const camera = { x: 0, z: 1 };   // z — «наезд» камеры (v0.8)
 const XP_ROUND    = 15;        // опыт за выигранный раунд
 const XP_MATCH    = 40;        // опыт за победу в матче
 const XP_LOSS     = 10;        // опыт за поражение («за тренировку»)
@@ -69,6 +69,9 @@ const W = 960, H = 540;
 const GROUND = 470;            // линия пола (y ступней)
 const S = 4;                   // масштаб пикселя спрайта
 const STEP = 1000 / 60;        // фиксированный шаг: 60 тиков/с
+const ZOOM_CY = 340;           // центр «наезда» камеры по вертикали
+function toScreenX(wx) { return (wx - camera.x - W / 2) * camera.z + W / 2; }
+function toScreenY(wy) { return (wy - ZOOM_CY) * camera.z + ZOOM_CY; }
 
 const cv = document.getElementById("game");
 const ctx = cv.getContext("2d");
@@ -799,6 +802,25 @@ const HEADS = {
     "hwh.....hwh",
     "hhh.....hhh",
   ]},
+  shogun: { x: 7, y: 5, rows: [        // шлем-кабуто с золотым рогом
+    "g.........g",
+    ".g..mmm..g.",
+    "..mmmmmmm..",
+    ".mmmmmmmmm.",
+    ".kkkkkkkkk.",
+  ]},
+  oni: { x: 8, y: 6, rows: [           // рожки демона
+    "u.......u",
+    "uh.....hu",
+    ".hhhhhhh.",
+    ".hhhhhhh.",
+  ]},
+  panda: { x: 7, y: 6, rows: [         // круглые уши панды
+    ".kk.....kk.",
+    "kkkk...kkkk",
+    "kkkk...kkkk",
+    ".kk.....kk.",
+  ]},
   plain: null,                         // Крокодайл — без убора
 };
 /* смещение головы в кадрах, где боец наклонён; null — не рисовать */
@@ -841,6 +863,9 @@ const HEROES = [
   { name:"РОНИН",     head:"ronin",   hair:"#2c2836" },
   { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a" },
   { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true },
+  { name:"СЁГУН",     head:"shogun",  hair:"#232030" },
+  { name:"ОНИ",       head:"oni",     hair:"#b8302c" },
+  { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4" },
 ];
 const PAL = {
   p1: Object.assign({}, BASE, { h:"#f8e040" }, OUTFITS[0]),
@@ -980,6 +1005,21 @@ for (const rar of RARITIES) {
     o: shade(rar.color, -0.62), g: rar.color, w: shade(rar.color, 0.55),
   }, 7, 7));
 }
+/* превью героев для меню (v0.8): idle-кадр в цветах костюма игрока */
+const HERO_PREV = {};
+function heroPreview(hi, oi) {
+  const key = hi + ":" + oi;
+  if (HERO_PREV[key]) return HERO_PREV[key];
+  const hr = HEROES[hi];
+  const pal = Object.assign({}, BASE, { h: hr.hair }, OUTFITS[oi]);
+  const img = renderGrid(RAW.idle, pal, GW, GH);
+  const head = HEADS[hr.head];
+  if (head) {
+    const hc = renderGrid(head.rows, pal, head.rows[0].length, head.rows.length);
+    img.getContext("2d").drawImage(hc, head.x, head.y);
+  }
+  return (HERO_PREV[key] = epx2(img));
+}
 
 /* ============================================================
    АРЕНА — объект-локация. Новая локация = ещё один такой объект.
@@ -1013,6 +1053,9 @@ const ARENA = {
     this.buf = document.createElement("canvas");
     this.buf.width = 240; this.buf.height = 135;
     this.g = this.buf.getContext("2d");
+    this.mt = document.createElement("canvas");   // слой гор (v0.8)
+    this.mt.width = 240; this.mt.height = 92;
+    this.mg = this.mt.getContext("2d");
     let seed = 12345;
     for (let i = 0; i < 46; i++) {          // звёзды на фиксированных местах
       seed = (seed * 1103515245 + 12345) % 2147483648;
@@ -1028,7 +1071,7 @@ const ARENA = {
     const bb = Math.round((a & 255) + ((b & 255) - (a & 255)) * k);
     return "rgb(" + r + "," + gg + "," + bb + ")";
   },
-  draw(t, themeIdx, camX) {
+  drawSky(t, themeIdx, camX) {
     const TH = THEMES[themeIdx || 0];
     const g = this.g;
     const phase = (t % CYCLE_LEN) / CYCLE_LEN;
@@ -1064,40 +1107,49 @@ const ARENA = {
       g.fillRect(cx - 5, cy - 3, 3, 3); g.fillRect(cx + 1, cy + 2, 2, 2);
       g.fillRect(cx + 3, cy - 6, 2, 2);
     }
-    // горы и пол темнеют к ночи (солнце садится за горы)
-    g.fillStyle = this.lerpHex(TH.mtN, TH.mtD, an);
-    g.beginPath(); g.moveTo(0, 92); g.lineTo(38, 58); g.lineTo(84, 92); g.fill();
-    g.beginPath(); g.moveTo(60, 92); g.lineTo(120, 48); g.lineTo(190, 92); g.fill();
-    g.beginPath(); g.moveTo(160, 92); g.lineTo(214, 62); g.lineTo(240, 92); g.fill();
+    // горы и декор — на отдельном слое, поедет параллаксом (v0.8)
+    const mg = this.mg;
+    mg.clearRect(0, 0, 240, 92);
+    mg.fillStyle = this.lerpHex(TH.mtN, TH.mtD, an);
+    mg.beginPath(); mg.moveTo(0, 92); mg.lineTo(38, 58); mg.lineTo(84, 92); mg.fill();
+    mg.beginPath(); mg.moveTo(60, 92); mg.lineTo(120, 48); mg.lineTo(190, 92); mg.fill();
+    mg.beginPath(); mg.moveTo(160, 92); mg.lineTo(214, 62); mg.lineTo(240, 92); mg.fill();
     if (TH.decor === "torii") {
-      g.fillStyle = this.lerpHex("#0e0916", "#1c1226", an);
-      g.fillRect(88, 44, 64, 6);
-      g.fillRect(84, 42, 8, 8); g.fillRect(148, 42, 8, 8);
-      g.fillRect(94, 56, 52, 5);
-      g.fillRect(97, 44, 7, 48);
-      g.fillRect(136, 44, 7, 48);
+      mg.fillStyle = this.lerpHex("#0e0916", "#1c1226", an);
+      mg.fillRect(88, 44, 64, 6);
+      mg.fillRect(84, 42, 8, 8); mg.fillRect(148, 42, 8, 8);
+      mg.fillRect(94, 56, 52, 5);
+      mg.fillRect(97, 44, 7, 48);
+      mg.fillRect(136, 44, 7, 48);
     } else if (TH.decor === "bamboo") {
       for (const bx of [16, 44, 78, 148, 188, 218]) {
-        g.fillStyle = this.lerpHex("#1a2c16", "#3f6b33", an);
-        g.fillRect(bx, 34, 5, 58);
-        g.fillStyle = this.lerpHex("#101c0e", "#2c4a24", an);
-        for (let jy = 42; jy < 92; jy += 13) g.fillRect(bx, jy, 5, 2);
+        mg.fillStyle = this.lerpHex("#1a2c16", "#3f6b33", an);
+        mg.fillRect(bx, 34, 5, 58);
+        mg.fillStyle = this.lerpHex("#101c0e", "#2c4a24", an);
+        for (let jy = 42; jy < 92; jy += 13) mg.fillRect(bx, jy, 5, 2);
       }
     } else if (TH.decor === "snow") {
-      g.fillStyle = this.lerpHex("#6a7288", "#eef2fa", an);
-      g.beginPath(); g.moveTo(28, 67); g.lineTo(38, 58); g.lineTo(48, 67); g.fill();
-      g.beginPath(); g.moveTo(107, 58); g.lineTo(120, 48); g.lineTo(133, 58); g.fill();
-      g.beginPath(); g.moveTo(203, 68); g.lineTo(214, 62); g.lineTo(225, 68); g.fill();
+      mg.fillStyle = this.lerpHex("#6a7288", "#eef2fa", an);
+      mg.beginPath(); mg.moveTo(28, 67); mg.lineTo(38, 58); mg.lineTo(48, 67); mg.fill();
+      mg.beginPath(); mg.moveTo(107, 58); mg.lineTo(120, 48); mg.lineTo(133, 58); mg.fill();
+      mg.beginPath(); mg.moveTo(203, 68); mg.lineTo(214, 62); mg.lineTo(225, 68); mg.fill();
     }
     g.fillStyle = this.lerpHex(TH.grN, TH.grD, an); g.fillRect(0, 92, 240, 43);
     g.fillStyle = this.lerpHex(TH.edN, TH.edD, an); g.fillRect(0, 92, 240, 2);
     g.fillStyle = this.lerpHex(TH.lnN, TH.lnD, an);
     for (let x = 0; x < 240; x += 24) g.fillRect(x, 96, 1, 39);
     for (let y = 104; y < 135; y += 12) g.fillRect(0, y, 240, 1);
-    // небо и горы «бесконечно далеко», пол скроллится плитками
+    // небо фиксировано, горы плывут медленным параллаксом (v0.8)
     ctx.drawImage(this.buf, 0, 0, 240, 92, 0, 0, W, 368);
+    const par = (((camX || 0) * 0.25) % W + W) % W;
+    ctx.drawImage(this.mt, 0, 0, 240, 92, -par, 0, W, 368);
+    ctx.drawImage(this.mt, 0, 0, 240, 92, W - par, 0, W, 368);
+    ctx.fillStyle = this.lerpHex(TH.grN, TH.grD, an);
+    ctx.fillRect(0, 368, W, H - 368);      // подложка под пол
+  },
+  drawFloor() {                            // пол в мировых координатах
     for (let tx = 0; tx < WORLD_W; tx += W)
-      ctx.drawImage(this.buf, 0, 92, 240, 43, tx - (camX || 0), 368, W, 172);
+      ctx.drawImage(this.buf, 0, 92, 240, 43, tx, 368, W, 172);
   }
 };
 ARENA.init();
@@ -1481,11 +1533,11 @@ class Fighter {
     if (this.invuln > 0 || this.state === ST.KO || this.state === ST.DOWN) return false;
     if (this.state === ST.BLOCK && !a.knockdown) {   // щит! подножка пробивает
       this.vx = ((this.x >= fromX) ? 1 : -1) * (a.kb || 4) * 0.8;
-      world.floater(this.x - camera.x, GROUND - 150, "БЛОК", "#7ba4f0");
+      world.floater(this.x, GROUND - 150, "БЛОК", "#7ba4f0", true);
       return true;
     }
     this.hp = Math.max(0, this.hp - a.dmg);
-    world.floater(this.x - camera.x, GROUND - 172, "-" + a.dmg, "#ff6a5e");
+    world.floater(this.x, GROUND - 172, "-" + a.dmg, "#ff6a5e", true);
     this.flash = 5;
     const dir = (this.x >= fromX) ? 1 : -1;
     this.vx = dir * a.kb;
@@ -1533,10 +1585,11 @@ class Fighter {
     const fr = FRAMES[this.pal][this.frameName()];
     const img = (this.flash > 0) ? fr.white : fr.img;
     const bob = (this.state === ST.IDLE && Math.floor(this.t / 30) % 2) ? S : 0;
-    // тень
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    // тень: в прыжке меньше и бледнее — ощущение высоты (v0.8)
+    const sk = Math.max(0.5, 1 + this.yOff / 240);
+    ctx.fillStyle = "rgba(0,0,0," + (0.35 * sk).toFixed(2) + ")";
     ctx.beginPath();
-    ctx.ellipse(this.x, GROUND + 6, 34, 8, 0, 0, 7);
+    ctx.ellipse(this.x, GROUND + 6, 34 * sk, 8 * sk, 0, 0, 7);
     ctx.fill();
     // спрайт с якорем и отражением
     ctx.save();
@@ -1722,15 +1775,16 @@ const world = {
     const rar = this.rollRarity();
     this.coinDrops.push({ x: cr.x, y: cr.y + 20, vx: (Math.random() - 0.5) * 2,
                           vy: -6.5, rar: rar, t: 0, alive: true });
-    this.floater(cr.x - camera.x, cr.y - 6, rar.name + "!", rar.color);
+    this.floater(cr.x, cr.y - 6, rar.name + "!", rar.color, true);
     if (rar.coins >= 20) {                  // фейерверк для топ-редкостей
       for (let i = 0; i < 8; i++)
         this.spark(cr.x + (Math.random() - 0.5) * 70,
                    cr.y + (Math.random() - 0.5) * 60);
     }
   },
-  floater(x, y, txt, color) {
-    this.floaters.push({ x: x, y: y, txt: txt, color: color, t: 0 });
+  floater(x, y, txt, color, inWorld) {
+    this.floaters.push({ x: x, y: y, txt: txt, color: color, t: 0,
+                         world: !!inWorld });
   },
   tickFloaters() {
     for (const fl of this.floaters) { fl.t++; fl.y -= 0.9; }
@@ -1740,9 +1794,11 @@ const world = {
     ctx.font = "bold 20px 'Courier New', monospace";
     ctx.textAlign = "center";
     for (const fl of this.floaters) {
+      const fx = fl.world ? toScreenX(fl.x) : fl.x;
+      const fy = fl.world ? toScreenY(fl.y) : fl.y;
       ctx.globalAlpha = Math.max(0, 1 - fl.t / 45);
-      ctx.fillStyle = "#191722"; ctx.fillText(fl.txt, fl.x + 2, fl.y + 2);
-      ctx.fillStyle = fl.color;  ctx.fillText(fl.txt, fl.x, fl.y);
+      ctx.fillStyle = "#191722"; ctx.fillText(fl.txt, fx + 2, fy + 2);
+      ctx.fillStyle = fl.color;  ctx.fillText(fl.txt, fx, fy);
       ctx.globalAlpha = 1;
     }
   },
@@ -1788,9 +1844,9 @@ const world = {
         if (this.overlap(cbox, f.hurtbox())) {
           cd.alive = false;
           profile.coins += cd.rar.coins; saveProfile();
-          this.floater(cd.x - camera.x, cd.y - 26,
+          this.floater(cd.x, cd.y - 26,
             "+" + cd.rar.coins + (cd.rar.coins === 1 ? " монета" :
-              cd.rar.coins === 3 ? " монеты" : " монет"), cd.rar.color);
+              cd.rar.coins === 3 ? " монеты" : " монет"), cd.rar.color, true);
           this.spark(cd.x, cd.y);
         }
       }
@@ -2021,9 +2077,14 @@ const game = {
       if (ev.type === "down") this.heroSel = (this.heroSel + 1) % n;
       if (ev.type === "back") { this.mode = "menu"; return; }
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 150, 46, n);
-        if (hit < 0) return;
-        this.heroSel = hit; ev = { type: "ok" };
+        if (Math.abs(ev.y - 118) < 20) { this.heroSel = 0; ev = { type: "ok" }; }
+        else if (Math.abs(ev.y - 390) < 22) {
+          this.heroSel = HEROES.length + 1; ev = { type: "ok" };
+        } else {
+          const hit = this.heroCardAt(ev.x, ev.y);
+          if (hit < 0) return;
+          this.heroSel = hit + 1; ev = { type: "ok" };
+        }
       }
       if (ev.type === "ok") {
         if (this.heroSel === 0) { this.heroFor = 1 - this.heroFor; return; }
@@ -2195,7 +2256,7 @@ const game = {
   },
 
   drawMarker(f, color) {
-    const sx = f.x - camera.x, ty = GROUND - 214 + f.yOff;
+    const sx = toScreenX(f.x), ty = toScreenY(GROUND - 214 + f.yOff);
     ctx.font = "bold 13px 'Courier New', monospace";
     ctx.textAlign = "center"; ctx.fillStyle = color;
     ctx.fillText(f.name, sx, ty);
@@ -2237,34 +2298,53 @@ const game = {
     ctx.globalAlpha = 1;
   },
 
-  drawHeroes() {
-    ctx.fillStyle = "rgba(10,10,22,0.75)"; ctx.fillRect(0, 0, W, H);
-    this.banner("ГЕРОИ", 46, 92);
-    const cur = this.heroFor === 0 ? profile.hero : profile.hero2;
-    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
-    ctx.fillStyle = (this.heroSel === 0) ? "#e8c15a" : "#7ec8ff";
-    ctx.fillText((this.heroSel === 0 ? "▶ " : "  ") + "ВЫБИРАЕТ: ИГРОК " +
-                 (this.heroFor + 1) + " ⇄", W / 2 - 240, 150);
+  heroCardRect(i) {
+    const n = HEROES.length, cw = 116, gap = 8;
+    const x0 = (W - (n * (cw + gap) - gap)) / 2;
+    return { x: x0 + i * (cw + gap), y: 160, w: cw, h: 182 };
+  },
+  heroCardAt(x, y) {
     for (let i = 0; i < HEROES.length; i++) {
-      const y = 196 + i * 46;
-      ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
-      ctx.fillStyle = (i + 1 === this.heroSel) ? "#e8c15a" : "#f2ead8";
-      ctx.fillText((i + 1 === this.heroSel ? "▶ " : "  ") + HEROES[i].name +
-                   (HEROES[i].hook ? " (свой крюк)" : ""), W / 2 - 240, y);
-      if (i === cur) {
-        ctx.fillStyle = "#7ec8ff"; ctx.font = "bold 17px 'Courier New', monospace";
-        ctx.fillText("ВЫБРАН", W / 2 + 60, y);
-      }
+      const r = this.heroCardRect(i);
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
     }
-    const yb = 196 + HEROES.length * 46;
-    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
+    return -1;
+  },
+  drawHeroes() {
+    ctx.fillStyle = "rgba(10,10,22,0.8)"; ctx.fillRect(0, 0, W, H);
+    this.banner("ГЕРОИ", 44, 76);
+    const cur = this.heroFor === 0 ? profile.hero : profile.hero2;
+    const oi  = this.heroFor === 0 ? profile.outfit : profile.outfit2;
+    ctx.font = "bold 23px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = (this.heroSel === 0) ? "#e8c15a" : "#7ec8ff";
+    ctx.fillText((this.heroSel === 0 ? "▶ " : "") + "ВЫБИРАЕТ: ИГРОК " +
+                 (this.heroFor + 1) + " ⇄", W / 2, 124);
+    for (let i = 0; i < HEROES.length; i++) {
+      const r = this.heroCardRect(i), h = HEROES[i];
+      const sel = (this.heroSel === i + 1);
+      ctx.fillStyle = "rgba(30,32,54,0.92)";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      if (i === cur) {
+        ctx.fillStyle = "rgba(126,200,255,0.14)";
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+      }
+      ctx.strokeStyle = sel ? "#e8c15a" : (i === cur ? "#7ec8ff" : "#3a3c58");
+      ctx.lineWidth = sel ? 3 : 2;
+      ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+      ctx.drawImage(heroPreview(i, oi),
+                    r.x + (r.w - GW * 3) / 2, r.y + 6, GW * 3, GH * 3);
+      ctx.font = "bold 14px 'Courier New', monospace"; ctx.textAlign = "center";
+      ctx.fillStyle = sel ? "#e8c15a" : "#f2ead8";
+      ctx.fillText(h.name, r.x + r.w / 2, r.y + r.h - 28);
+      ctx.font = "12px 'Courier New', monospace"; ctx.fillStyle = "#7ec8ff";
+      ctx.fillText(i === cur ? "ВЫБРАН" : (h.hook ? "свой крюк" : ""),
+                   r.x + r.w / 2, r.y + r.h - 10);
+    }
+    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "center";
     ctx.fillStyle = (this.heroSel === HEROES.length + 1) ? "#e8c15a" : "#f2ead8";
-    ctx.fillText((this.heroSel === HEROES.length + 1 ? "▶ " : "  ") + "НАЗАД", W / 2 - 240, yb);
-    ctx.drawImage(FRAMES[this.heroFor === 0 ? "p1" : "p2c"].idle.img,
-                  W / 2 + 150, 150, GW * 5, GH * 5);
-    ctx.font = "15px 'Courier New', monospace";
-    ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
-    ctx.fillText("цвет одежды героя меняется в меню ОДЕЖДА", W / 2, yb + 40);
+    ctx.fillText((this.heroSel === HEROES.length + 1 ? "▶ " : "") + "НАЗАД", W / 2, 396);
+    ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+    ctx.fillText("тапни карточку героя · цвет одежды — в меню ОДЕЖДА", W / 2, 432);
     world.drawFloaters();
   },
 
@@ -2316,7 +2396,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.7 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.8 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2430,15 +2510,27 @@ const game = {
 
   draw() {
     const inFight = ["intro", "fight", "play", "ko", "matchend"].indexOf(this.mode) >= 0;
+    /* «наезд» камеры (v0.8): бойцы рядом — план крупнее */
+    const zTarget = inFight
+      ? Math.max(1, Math.min(1.22,
+          1.3 - Math.abs(this.p1.x - this.p2.x) * 0.00038))
+      : 1;
+    camera.z += (zTarget - camera.z) * 0.08;
+    if (Math.abs(camera.z - 1) < 0.002) camera.z = 1;
+    const vh = W / (2 * camera.z);
     camera.x = inFight
-      ? Math.max(0, Math.min(WORLD_W - W, (this.p1.x + this.p2.x) / 2 - W / 2))
+      ? Math.max(vh - W / 2, Math.min(WORLD_W - vh - W / 2,
+          (this.p1.x + this.p2.x) / 2 - W / 2))
       : (WORLD_W - W) / 2;
     ctx.save();
     if (world.shake > 0) {
       ctx.translate((Math.random() - 0.5) * world.shake * 2,
                     (Math.random() - 0.5) * world.shake * 2);
     }
-    ARENA.draw(cycleT, this.arenaIdx, camera.x);
+    ARENA.drawSky(cycleT, this.arenaIdx, camera.x);
+    if (!inFight) {                    // в меню пол рисуем без «наезда»
+      ctx.save(); ctx.translate(-camera.x, 0); ARENA.drawFloor(); ctx.restore();
+    }
 
     if (this.mode === "menu")   { this.drawMenu();   ctx.restore(); return; }
     if (this.mode === "heroes") { this.drawHeroes(); ctx.restore(); return; }
@@ -2447,8 +2539,11 @@ const game = {
     if (this.mode === "cups")   { this.drawCups();   ctx.restore(); return; }
     if (this.mode === "outfit") { this.drawOutfit(); ctx.restore(); return; }
 
-    ctx.save();
-    ctx.translate(-camera.x, 0);      // мир под камерой
+    ctx.save();                       // мир: камера + «наезд» (v0.8)
+    ctx.translate(W / 2, ZOOM_CY);
+    ctx.scale(camera.z, camera.z);
+    ctx.translate(-camera.x - W / 2, -ZOOM_CY);
+    ARENA.drawFloor();
     world.drawBack();                 // ящики — позади бойцов
     this.p2.draw();
     this.p1.draw();
