@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.8 — проект Пети
+   SAMURAI DUEL v0.9 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -45,13 +45,13 @@ const LEVELUP_COINS = 15;      // бонус монет за новый уров
 
 /* ---------- ЯЩИКИ С МОНЕТАМИ (v0.6) -------------------------
    Порядок Пети: сверху — самое ценное. weight — шанс из 100. */
-const RARITIES = [
-  { name:"ЛЕГЕНДАРНЫЙ", color:"#ffb52e", coins:30, weight:2  },
-  { name:"МИФИЧЕСКИЙ",  color:"#ff4d6d", coins:20, weight:5  },
-  { name:"ЭПИЧЕСКИЙ",   color:"#b45cff", coins:12, weight:11 },
-  { name:"РЕДКИЙ",      color:"#4aa3ff", coins:6,  weight:20 },
-  { name:"ОБЫЧНЫЙ",     color:"#e8e8f0", coins:3,  weight:30 },
-  { name:"РЖАВЫЙ",      color:"#a06a38", coins:1,  weight:32 },
+const RARITIES = [   /* из ящика падают ОЧКИ СИЛЫ для ПРОКАЧКИ (v0.9) */
+  { name:"ЛЕГЕНДАРНЫЙ", color:"#ffb52e", power:5, weight:2  },
+  { name:"МИФИЧЕСКИЙ",  color:"#ff4d6d", power:3, weight:5  },
+  { name:"ЭПИЧЕСКИЙ",   color:"#b45cff", power:2, weight:11 },
+  { name:"РЕДКИЙ",      color:"#4aa3ff", power:1, weight:20 },
+  { name:"ОБЫЧНЫЙ",     color:"#e8e8f0", power:1, weight:30 },
+  { name:"РЖАВЫЙ",      color:"#a06a38", power:1, weight:32 },
 ];
 const CRATE_HP    = 2;             // ударов, чтобы разбить ящик
 const CRATE_GAP   = [540, 900];    // пауза между ящиками (9–15 с)
@@ -773,10 +773,12 @@ const CUP = [
 ];
 /* причёски-скины: рисуются ПОВЕРХ кадра в позиции головы */
 const HEADS = {
-  naruto: { x: 6, y: 5, rows: [        // жёлтые вихры
+  naruto: { x: 6, y: 3, rows: [        // жёлтые вихры-шипы (v0.9)
     "..h...h...h..",
     ".hh..hhh..hh.",
+    ".hhh.hhh.hhh.",
     ".hhhhhhhhhhh.",
+    "hhhhhhhhhhhhh",
     "hhhhhhhhhhhhh",
     "hhhhhhhhhhhhh",
   ]},
@@ -1032,6 +1034,12 @@ const THEMES = [
     edD:"#4f6a44", edN:"#243120", lnD:"#26331f", lnN:"#121a10", decor:"bamboo" },
   { name: "СНЕЖНЫЕ ВЕРШИНЫ", mtD:"#5a6480", mtN:"#262c44", grD:"#c8cede", grN:"#4a506a",
     edD:"#e8ecf6", edN:"#5c637e", lnD:"#a8b0c4", lnN:"#3a405a", decor:"snow" },
+  { name: "ЗАКАТНАЯ ПУСТЫНЯ", mtD:"#c8925a", mtN:"#5a3c28", grD:"#e0b878", grN:"#6a5236",
+    edD:"#f0d8a0", edN:"#7a6040", lnD:"#c0a068", lnN:"#544028", decor:"cactus" },
+  { name: "ОГНЕННЫЙ ВУЛКАН", mtD:"#4a2820", mtN:"#1a0e0a", grD:"#3a2420", grN:"#180c0a",
+    edD:"#6a3020", edN:"#2a1410", lnD:"#5a2818", lnN:"#1e0e08", decor:"volcano" },
+  { name: "НОЧНОЙ ГОРОД", mtD:"#2a2e44", mtN:"#12141f", grD:"#2c2e3a", grN:"#141520",
+    edD:"#3e4258", edN:"#20222e", lnD:"#2a2c3a", lnN:"#141520", decor:"city" },
 ];
 
 const ARENA = {
@@ -1133,6 +1141,31 @@ const ARENA = {
       mg.beginPath(); mg.moveTo(28, 67); mg.lineTo(38, 58); mg.lineTo(48, 67); mg.fill();
       mg.beginPath(); mg.moveTo(107, 58); mg.lineTo(120, 48); mg.lineTo(133, 58); mg.fill();
       mg.beginPath(); mg.moveTo(203, 68); mg.lineTo(214, 62); mg.lineTo(225, 68); mg.fill();
+    } else if (TH.decor === "cactus") {
+      mg.fillStyle = this.lerpHex("#2a4a24", "#4a8038", an);
+      for (const cx of [22, 70, 150, 210]) {
+        mg.fillRect(cx, 66, 6, 26);                 // ствол
+        mg.fillRect(cx - 6, 70, 4, 8); mg.fillRect(cx - 6, 74, 6, 4);   // левая рука
+        mg.fillRect(cx + 8, 72, 4, 10); mg.fillRect(cx + 6, 78, 6, 4);  // правая рука
+      }
+    } else if (TH.decor === "volcano") {
+      mg.fillStyle = this.lerpHex("#2a1410", "#4a2418", an);
+      mg.beginPath(); mg.moveTo(78, 92); mg.lineTo(120, 40); mg.lineTo(162, 92); mg.fill();
+      const glow = (0.6 + 0.4 * Math.sin(t * 0.08)).toFixed(2);   // мерцание лавы
+      mg.fillStyle = "rgba(255,110,30," + glow + ")"; mg.fillRect(112, 40, 16, 6);
+      mg.fillStyle = "rgba(255,180,50," + glow + ")"; mg.fillRect(116, 42, 8, 3);
+      mg.fillStyle = "rgba(255,90,20,0.7)";
+      mg.fillRect(116, 46, 3, 30); mg.fillRect(122, 46, 2, 22);
+    } else if (TH.decor === "city") {
+      const lit = Math.max(0, 1 - an);              // окна светятся ночью
+      for (const b of [[10,58,20],[34,48,24],[62,64,18],[150,52,22],[178,62,20],[204,46,26]]) {
+        mg.fillStyle = this.lerpHex("#0e1018", "#3a3e56", an);
+        mg.fillRect(b[0], b[1], b[2], 92 - b[1]);
+        mg.fillStyle = "rgba(255,214,90," + (0.2 + 0.6 * lit).toFixed(2) + ")";
+        for (let wy = b[1] + 4; wy < 90; wy += 8)
+          for (let wx = b[0] + 3; wx < b[0] + b[2] - 2; wx += 6)
+            mg.fillRect(wx, wy, 2, 3);
+      }
     }
     g.fillStyle = this.lerpHex(TH.grN, TH.grD, an); g.fillRect(0, 92, 240, 43);
     g.fillStyle = this.lerpHex(TH.edN, TH.edD, an); g.fillRect(0, 92, 240, 2);
@@ -1308,12 +1341,25 @@ const WEAPONS = {
               active:6, recover:26, kb:9, stun:26, knockdown:false,
               box:{ fx:16, fy:48, w:104, h:28 },
               frames:["katanaA","naginB"], desc:"самый длинный удар" },
+  nunchaku: { title:"НУНЧАКИ",  price:90, type:"melee", dmg:8,  startup:5,
+              active:5, recover:9, kb:6, stun:16, knockdown:false,
+              box:{ fx:14, fy:54, w:58, h:24 },
+              frames:["idle","punchB"], desc:"очень быстрые удары" },
+  hammer:   { title:"МОЛОТ",    price:100, type:"melee", dmg:20, startup:20,
+              active:6, recover:28, kb:13, stun:30, knockdown:true,
+              box:{ fx:14, fy:48, w:86, h:38 },
+              frames:["katanaA","naginB"], desc:"медленный, сносит с ног" },
+  fireball: { title:"ОГНЕННЫЙ ШАР", price:130, type:"proj", dmg:15, startup:16,
+              recover:22, cooldown:60, proj:"fireball",
+              frames:["bowA","bowA"], desc:"огненный шар, большой урон" },
 };
-const WEAPON_ORDER = ["katana", "hook", "bow", "kunai", "naginata"];
+const WEAPON_ORDER = ["katana", "hook", "nunchaku", "naginata", "hammer",
+                      "bow", "kunai", "fireball"];
 const PROJ = {
   shuriken: { dmg: DMG.shuriken, kb: 3, stun: 12, speed: 7.5, size: 16 },
   arrow:    { dmg: WEAPONS.bow.dmg, kb: 5, stun: 16, speed: 11, size: 14 },
   kunai:    { dmg: WEAPONS.kunai.dmg, kb: 4, stun: 14, speed: 13, size: 12 },
+  fireball: { dmg: WEAPONS.fireball.dmg, kb: 6, stun: 18, speed: 8, size: 22 },
 };
 
 /* ---------- СОХРАНЕНИЕ (монеты и купленное) ------------------
@@ -1776,7 +1822,7 @@ const world = {
     this.coinDrops.push({ x: cr.x, y: cr.y + 20, vx: (Math.random() - 0.5) * 2,
                           vy: -6.5, rar: rar, t: 0, alive: true });
     this.floater(cr.x, cr.y - 6, rar.name + "!", rar.color, true);
-    if (rar.coins >= 20) {                  // фейерверк для топ-редкостей
+    if (rar.power >= 3) {                   // фейерверк для топ-редкостей
       for (let i = 0; i < 8; i++)
         this.spark(cr.x + (Math.random() - 0.5) * 70,
                    cr.y + (Math.random() - 0.5) * 60);
@@ -1843,10 +1889,11 @@ const world = {
         if (!cd.alive || !f.ctrl.human) continue;   // ИИ монеты не берёт
         if (this.overlap(cbox, f.hurtbox())) {
           cd.alive = false;
-          profile.coins += cd.rar.coins; saveProfile();
+          const gp = cd.rar.power;
+          profile.power.pts += gp; saveProfile();
           this.floater(cd.x, cd.y - 26,
-            "+" + cd.rar.coins + (cd.rar.coins === 1 ? " монета" :
-              cd.rar.coins === 3 ? " монеты" : " монет"), cd.rar.color, true);
+            "+" + gp + (gp === 1 ? " СИЛА" : gp < 5 ? " СИЛЫ" : " СИЛ"),
+            cd.rar.color, true);
           this.spark(cd.x, cd.y);
         }
       }
@@ -1924,6 +1971,14 @@ const world = {
       if (pj.kind === "shuriken") {
         const img = SHU_IMG[Math.floor(pj.t / 4) % 2];
         ctx.drawImage(img, pj.x - 7, pj.y - 7, 15, 15);
+      } else if (pj.kind === "fireball") {
+        const fr = 12 + Math.sin(pj.t * 0.5) * 2;
+        ctx.fillStyle = "rgba(255,120,30,0.30)";
+        ctx.beginPath(); ctx.arc(pj.x, pj.y, fr + 7, 0, 7); ctx.fill();
+        ctx.fillStyle = "#ff7a1e";
+        ctx.beginPath(); ctx.arc(pj.x, pj.y, fr, 0, 7); ctx.fill();
+        ctx.fillStyle = "#ffd24a";
+        ctx.beginPath(); ctx.arc(pj.x - pj.vx * 0.3, pj.y, fr * 0.5, 0, 7); ctx.fill();
       } else {
         ctx.save();
         ctx.translate(pj.x, pj.y);
@@ -2118,7 +2173,7 @@ const game = {
       if (ev.type === "down") this.shopSel = (this.shopSel + 1) % n;
       if (ev.type === "back") { this.mode = "menu"; return; }
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 150, 50, n);
+        const hit = this.rowAt(ev.y, 118, 32, n);
         if (hit < 0) return;
         this.shopSel = hit; ev = { type: "ok" };
       }
@@ -2354,7 +2409,7 @@ const game = {
     const pw = profile.power;
     ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "center";
     ctx.fillStyle = "#9be07a";
-    ctx.fillText("ОЧКИ СИЛЫ: " + pw.pts + "  (+1 за победу в матче с СЕНСЕЕМ)", W / 2, 154);
+    ctx.fillText("ОЧКИ СИЛЫ: " + pw.pts + "  (из ящиков и за победу в матче)", W / 2, 154);
     const rows = [
       { t: "ЗДОРОВЬЕ",   lv: pw.hp,  d: "+8 макс. здоровья за очко" },
       { t: "СИЛА УДАРА", lv: pw.dmg, d: "+8% урона за очко" },
@@ -2396,7 +2451,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.8 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.9 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2447,39 +2502,50 @@ const game = {
   },
 
   drawShop() {
-    ctx.fillStyle = "rgba(10,10,22,0.72)"; ctx.fillRect(0, 0, W, H);
-    this.banner("МАГАЗИН", 44, 88);
-    this.drawCoins(W - 180, 40);
-    ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(10,10,22,0.78)"; ctx.fillRect(0, 0, W, H);
+    this.banner("МАГАЗИН", 38, 62);
+    this.drawCoins(W - 172, 28);
+    const y0 = 118, step = 32;
+    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "center";
     ctx.fillStyle = (this.shopSel === 0) ? "#e8c15a" : "#7ec8ff";
     ctx.fillText((this.shopSel === 0 ? "▶ " : "") + "ПОКУПАЕТ: ИГРОК " +
-                 (this.shopFor + 1) + " ⇄", W / 2, 150);
+                 (this.shopFor + 1) + " ⇄", W / 2, y0);
+    const forHero = this.shopFor === 0 ? profile.hero : profile.hero2;
     for (let i = 0; i < WEAPON_ORDER.length; i++) {
       const id = WEAPON_ORDER[i], wp = WEAPONS[id];
-      const y = 200 + i * 50;
+      const y = y0 + (i + 1) * step;
       const ownedEff = profile.owned.indexOf(id) >= 0 ||
-                       (id === "hook" &&
-                        HEROES[this.shopFor === 0 ? profile.hero : profile.hero2].hook);
+                       (id === "hook" && HEROES[forHero].hook);
       const eq = (this.shopFor === 0 ? profile.equipped : profile.equipped2) === id;
-      const right = ownedEff ? (eq ? "ВЫБРАНО" : "выбрать") : (wp.price + " монет");
-      ctx.font = "bold 25px 'Courier New', monospace"; ctx.textAlign = "center";
+      const right = ownedEff ? (eq ? "✔ ВЫБРАНО" : "выбрать") : (wp.price + " монет");
+      ctx.font = "bold 21px 'Courier New', monospace"; ctx.textAlign = "center";
       ctx.fillStyle = (i + 1 === this.shopSel) ? "#e8c15a"
+                    : eq ? "#7ec8ff"
                     : (!ownedEff && profile.coins < wp.price) ? "#787c9c" : "#f2ead8";
       ctx.fillText((i + 1 === this.shopSel ? "▶ " : "") + wp.title + " — " + right, W / 2, y);
-      ctx.beginPath(); ctx.arc(W / 2 - 300, y + 13, 9, 0, 7);
-      ctx.fillStyle = "#3a5a8c"; ctx.fill();
-      ctx.font = "bold 14px 'Courier New', monospace";
-      ctx.fillStyle = "#cfe0ff"; ctx.fillText("i", W / 2 - 300, y + 18);
-      ctx.font = "14px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
-      ctx.fillText("тип: " + (wp.type === "proj" ? "снаряд" : "ближний бой") +
-                   " · урон " + wp.dmg + " · замах " + wp.startup + " тиков", W / 2, y + 18);
     }
-    const yb = 200 + WEAPON_ORDER.length * 50;
-    ctx.font = "bold 25px 'Courier New', monospace";
+    const yb = y0 + (WEAPON_ORDER.length + 1) * step;
+    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "center";
     ctx.fillStyle = (this.shopSel === WEAPON_ORDER.length + 1) ? "#e8c15a" : "#f2ead8";
     ctx.fillText((this.shopSel === WEAPON_ORDER.length + 1 ? "▶ " : "") + "НАЗАД", W / 2, yb);
-    ctx.font = "14px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
-    ctx.fillText("монеты общие · у героя КРОКОДАЙЛ свой крюк, бесплатный", W / 2, yb + 32);
+    // инфо-панель выбранного оружия
+    if (this.shopSel >= 1 && this.shopSel <= WEAPON_ORDER.length) {
+      const wp = WEAPONS[WEAPON_ORDER[this.shopSel - 1]], iy = yb + 30;
+      ctx.fillStyle = "rgba(30,32,54,0.92)"; ctx.fillRect(W / 2 - 300, iy - 20, 600, 46);
+      ctx.strokeStyle = "#3a5a8c"; ctx.lineWidth = 2;
+      ctx.strokeRect(W / 2 - 300, iy - 20, 600, 46);
+      ctx.font = "bold 16px 'Courier New', monospace";
+      ctx.fillStyle = "#cfe0ff"; ctx.textAlign = "center";
+      ctx.fillText(wp.desc, W / 2, iy - 1);
+      ctx.font = "14px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+      ctx.fillText("тип: " + (wp.type === "proj" ? "снаряд" : "ближний бой") +
+                   " · урон " + wp.dmg + " · замах " + wp.startup + " тиков" +
+                   (wp.knockdown ? " · сносит с ног" : ""), W / 2, iy + 17);
+    }
+    ctx.font = "13px 'Courier New', monospace"; ctx.fillStyle = "#8a90b0";
+    ctx.textAlign = "center";
+    ctx.fillText("монеты — из побед · сила — из ящиков · крюк КРОКОДАЙЛА бесплатный",
+                 W / 2, H - 10);
     world.drawFloaters();
   },
 
