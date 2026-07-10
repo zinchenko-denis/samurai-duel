@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.10 — проект Пети
+   SAMURAI DUEL v0.11 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1396,6 +1396,24 @@ profile.xp = profile.xp || 0;
 profile.matchesWon = profile.matchesWon || 0;
 profile.winStreak = profile.winStreak || 0;
 if (!profile.trophies) profile.trophies = [];
+if (profile.cups === undefined) profile.cups = 0;
+function cupRank(c) {           // ранг по очкам кубков (v0.11)
+  const tiers = [
+    [0, "ДЕРЕВО", "#b0895a"], [10, "БРОНЗА", "#c9803a"],
+    [30, "СЕРЕБРО", "#c8d0e0"], [60, "ЗОЛОТО", "#ffd23a"],
+    [100, "ПЛАТИНА", "#7ee0d0"], [180, "АЛМАЗ", "#7ec8ff"],
+    [300, "ЛЕГЕНДА", "#ff6ad6"],
+  ];
+  let idx = 0;
+  for (let i = 0; i < tiers.length; i++) if (c >= tiers[i][0]) idx = i;
+  const cur = tiers[idx], nxt = tiers[idx + 1];
+  const r = { name: cur[1], color: cur[2], next: null };
+  if (nxt) {
+    r.next = nxt[0]; r.nextName = nxt[1];
+    r.prog = Math.max(0, Math.min(1, (c - cur[0]) / (nxt[0] - cur[0])));
+  }
+  return r;
+}
 if (profile.difficulty === undefined) profile.difficulty = 1;
 if (profile.arena === undefined) profile.arena = 0;
 if (profile.outfit === undefined || profile.outfit >= OUTFITS.length) profile.outfit = 0;
@@ -2104,6 +2122,7 @@ const game = {
   newMatch(vs) {
     this.vsMode = !!vs;
     this.wins = [0, 0]; this.round = 1; this.matchPaid = false;
+    this.cupDelta = undefined;
     this.arenaIdx = (profile.arena < THEMES.length) ? profile.arena
                   : Math.floor(Math.random() * THEMES.length);
     this.p1.ctrl = new HumanController(this.vsMode
@@ -2166,11 +2185,7 @@ const game = {
     }
     saveProfile();
   },
-  awardCup(id) {
-    if (profile.trophies.indexOf(id) >= 0) return;
-    profile.trophies.push(id); saveProfile();
-    world.floater(W / 2, 258, "КУБОК: " + TROPHIES[id].title + "!", "#ffd98a");
-  },
+  awardCup(id) { /* достижения заменены на очки кубков (v0.11) */ },
 
   handleUI(ev) {
     if (this.mode === "menu") {
@@ -2372,13 +2387,16 @@ const game = {
             world.floater(W / 2, 122, "+1 ОЧКО СИЛЫ", "#9be07a");
             profile.matchesWon++; profile.winStreak++;
             this.gainXp(XP_MATCH);
-            this.awardCup("firstwin");
-            if (profile.winStreak >= 3) this.awardCup("streak3");
-            if (profile.matchesWon >= 10) this.awardCup("champ10");
+            const lost = this.wins[1];         // раундов проиграно победителем
+            const cd = lost === 0 ? 10 : lost === 1 ? 5 : 1;
+            profile.cups += cd; this.cupDelta = cd;
+            world.floater(W / 2, 158, "+" + cd + " КУБКОВ", "#ffd98a");
             saveProfile();
           } else if (!this.vsMode && this.wins[1] >= WINS_NEEDED && !this.matchPaid) {
             this.matchPaid = true;
             profile.winStreak = 0;
+            profile.cups = Math.max(0, profile.cups - 5); this.cupDelta = -5;
+            world.floater(W / 2, 158, "−5 КУБКОВ", "#ff8a8a");
             this.gainXp(XP_LOSS);
             saveProfile();
           }
@@ -2563,7 +2581,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.10 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.11 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2580,7 +2598,7 @@ const game = {
     ctx.drawImage(CUP_IMG, W / 2 + 116, y - 1, 33, 27);
     ctx.font = "bold 20px 'Courier New', monospace";
     ctx.fillStyle = "#ffd98a"; ctx.textAlign = "left";
-    ctx.fillText(profile.trophies.length + "/" + TROPHY_ORDER.length, W / 2 + 156, y + 16);
+    ctx.fillText(String(profile.cups), W / 2 + 156, y + 16);
   },
 
   drawOutfit() {
@@ -2696,27 +2714,42 @@ const game = {
   },
 
   drawCups() {
-    ctx.fillStyle = "rgba(10,10,22,0.78)";
-    ctx.fillRect(0, 0, W, H);
-    this.banner("КУБКИ", 52, 96);
-    for (let i = 0; i < TROPHY_ORDER.length; i++) {
-      const id = TROPHY_ORDER[i], tr = TROPHIES[id];
-      const got = profile.trophies.indexOf(id) >= 0;
-      const y = 156 + i * 54;
-      ctx.drawImage(got ? CUP_IMG : CUP_OFF, W / 2 - 268, y - 22, 33, 27);
-      ctx.font = "bold 24px 'Courier New', monospace"; ctx.textAlign = "left";
-      ctx.fillStyle = got ? "#f2ead8" : "#787c9c";
-      ctx.fillText(tr.title, W / 2 - 222, y);
-      ctx.font = "15px 'Courier New', monospace";
-      ctx.fillStyle = "#aab0d0";
-      ctx.fillText(tr.desc, W / 2 - 222, y + 20);
-      ctx.font = "bold 20px 'Courier New', monospace"; ctx.textAlign = "right";
-      ctx.fillStyle = got ? "#ffd98a" : "#3a3c58";
-      ctx.fillText(got ? "ПОЛУЧЕН" : "— — —", W / 2 + 268, y);
+    ctx.fillStyle = "rgba(10,10,22,0.84)"; ctx.fillRect(0, 0, W, H);
+    this.banner("КУБКИ", 52, 88);
+    const rank = cupRank(profile.cups);
+    ctx.drawImage(CUP_IMG, W / 2 - 96, 118, 62, 51);
+    ctx.font = "bold 62px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = "#ffd98a"; ctx.fillText(String(profile.cups), W / 2 - 18, 166);
+    ctx.font = "bold 30px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = rank.color; ctx.fillText("РАНГ: " + rank.name, W / 2, 214);
+    if (rank.next) {
+      ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+      ctx.fillText("до ранга " + rank.nextName + ": ещё " +
+                   (rank.next - profile.cups) + " кубков", W / 2, 240);
+      ctx.fillStyle = "#191722"; ctx.fillRect(W / 2 - 150, 250, 300, 12);
+      ctx.fillStyle = rank.color; ctx.fillRect(W / 2 - 148, 252, 296 * rank.prog, 8);
+    } else {
+      ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+      ctx.fillText("максимальный ранг!", W / 2, 240);
     }
-    ctx.font = "16px 'Courier New', monospace";
-    ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
-    ctx.fillText("ENTER или ESC — назад", W / 2, 156 + TROPHY_ORDER.length * 54 + 16);
+    ctx.font = "bold 19px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = "#f2ead8";
+    ctx.fillText("КАК КОПЯТСЯ КУБКИ (в боях с СЕНСЕЕМ):", W / 2 - 250, 322);
+    const rules = [["победа 3:0 — без поражений", "+10", "#9be07a"],
+                   ["победа 3:1", "+5", "#9be07a"],
+                   ["победа 3:2", "+1", "#9be07a"],
+                   ["поражение", "−5", "#ff8a8a"]];
+    ctx.font = "17px 'Courier New', monospace";
+    for (let i = 0; i < rules.length; i++) {
+      const y = 354 + i * 32;
+      ctx.textAlign = "left"; ctx.fillStyle = "#cdd3ea";
+      ctx.fillText("• " + rules[i][0], W / 2 - 230, y);
+      ctx.textAlign = "right"; ctx.fillStyle = rules[i][2];
+      ctx.fillText(rules[i][1] + " кубков", W / 2 + 250, y);
+    }
+    ctx.font = "16px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+    ctx.textAlign = "center";
+    ctx.fillText("ENTER или ESC — назад", W / 2, 504);
     world.drawFloaters();
   },
 
@@ -2779,9 +2812,15 @@ const game = {
     }
     if (this.mode === "matchend") {
       const pWin = this.wins[0] >= WINS_NEEDED;
-      this.banner((pWin ? this.p1.name : this.p2.name) + " — ПОБЕДА В МАТЧЕ!", 42, 240);
-      if (pWin && !this.vsMode) this.banner("+" + COIN_MATCH + " монет за матч", 24, 286);
-      this.banner("ENTER — в меню", 24, 330);
+      this.banner((pWin ? this.p1.name : this.p2.name) + " — ПОБЕДА В МАТЧЕ!", 42, 228);
+      if (!this.vsMode && this.cupDelta !== undefined) {
+        ctx.font = "bold 30px 'Courier New', monospace"; ctx.textAlign = "center";
+        ctx.fillStyle = this.cupDelta >= 0 ? "#ffd98a" : "#ff8a8a";
+        ctx.fillText((this.cupDelta >= 0 ? "+" : "−") + Math.abs(this.cupDelta) +
+                     " кубков  ·  всего " + profile.cups, W / 2, 274);
+      }
+      if (pWin && !this.vsMode) this.banner("+" + COIN_MATCH + " монет", 22, 314);
+      this.banner("ENTER — в меню", 22, 352);
     }
     ctx.restore();
   }
