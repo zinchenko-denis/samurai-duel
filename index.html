@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.13 — проект Пети
+   SAMURAI DUEL v0.14 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1214,7 +1214,8 @@ ARENA.init();
    ============================================================ */
 function newPad() {
   return { left:false, right:false, jump:false, block:false, jab:false,
-           heavy:false, kick:false, sweep:false, shuriken:false, weapon:false };
+           heavy:false, kick:false, sweep:false, shuriken:false, weapon:false,
+           super:false };
 }
 /* Игрок 1 — левый блок клавиатуры, игрок 2 — правый блок + стрелки */
 const keyPad1 = newPad();
@@ -1223,12 +1224,12 @@ const uiEvents = [];
 const KEYMAP1 = {
   KeyA:"left", KeyD:"right", KeyW:"jump", KeyS:"block",
   KeyF:"jab", KeyG:"heavy", KeyH:"weapon",
-  KeyR:"kick", KeyT:"sweep", KeyY:"shuriken",
+  KeyR:"kick", KeyT:"sweep", KeyY:"shuriken", KeyE:"super",
 };
 const KEYMAP2 = {
   ArrowLeft:"left", ArrowRight:"right", ArrowUp:"jump", ArrowDown:"block",
   KeyJ:"jab", KeyK:"heavy", KeyL:"weapon",
-  KeyU:"kick", KeyI:"sweep", KeyO:"shuriken",
+  KeyU:"kick", KeyI:"sweep", KeyO:"shuriken", KeyP:"super",
 };
 const UIKEYS = { Enter:"ok", Space:"ok", ArrowUp:"up", KeyW:"up",
                  ArrowDown:"down", KeyS:"down", Escape:"back" };
@@ -1257,12 +1258,13 @@ const TBTNS = [
   { a: "jab",      t: "ДЖЕБ"   }, { a: "heavy",  t: "СИЛЬН." },
   { a: "kick",     t: "НОГА"   }, { a: "sweep",  t: "ПОДН."  },
   { a: "shuriken", t: "СЮРИК." }, { a: "weapon", t: "ОРУЖ."  },
+  { a: "super",    t: "СУПЕР"  },
 ];
 function tbtnRect(i) {
-  const bw = 104, bh = 62, gap = 10;
+  const bw = 104, bh = 52, gap = 8;      // 7 кнопок -> 4 ряда (v0.14)
   const col = i % 2, row = (i / 2) | 0;
   return { x: W - 16 - (2 - col) * (bw + gap) + gap,
-           y: H - 16 - (3 - row) * (bh + gap) + gap, w: bw, h: bh };
+           y: H - 16 - (4 - row) * (bh + gap) + gap, w: bw, h: bh };
 }
 function canvasXY(e) {
   const r = cv.getBoundingClientRect();
@@ -1461,13 +1463,17 @@ function levelInfo(xp) {
 const ST = { IDLE:"idle", WALK:"walk", JUMP:"jump", KICK:"kick", SWEEP:"sweep",
              JAB:"jab", HEAVY:"heavy", BLOCK:"block",
              THROW:"throwA", WEAPON:"weapon", HIT:"hit", DOWN:"down",
-             GETUP:"getup", KO:"ko" };
+             GETUP:"getup", KO:"ko", SUPER:"super" };
+const SUPER_MAX = 100;                  // порог заполнения шкалы супера
+const SUPER_ATK = { startup: 7, active: 10, recover: 26, dmg: 34, kb: 16,
+                    stun: 34, knockdown: true, box: { fx: 12, fy: 40, w: 122, h: 62 } };
 
 class Fighter {
   constructor(x, palName, name, ctrl) {
     this.pal = palName; this.name = name; this.ctrl = ctrl;
     this.weapon = "fist"; this.hook = false;
     this.maxHp = HP_MAX; this.dmgMul = 1; this.bx = 1; this.by = 1;
+    this.superMeter = 0; this.combo = 0; this.comboTimer = 0;
     this.reset(x, 1);
   }
   reset(x, facing) {
@@ -1493,6 +1499,7 @@ class Fighter {
     this.t++;
     if (this.flash > 0) this.flash--;
     if (this.invuln > 0) this.invuln--;
+    if (this.comboTimer > 0 && --this.comboTimer === 0) this.combo = 0;
     if (this.shuCd > 0) this.shuCd--;
     if (this.wpnCd > 0) this.wpnCd--;
     this.dispHp += (this.hp - this.dispHp) * 0.06;
@@ -1516,6 +1523,12 @@ class Fighter {
           break;
         }
         if (pad.block) { this.setState(ST.BLOCK); break; }
+        if (pad.super && this.superMeter >= SUPER_MAX) {
+          this.superMeter = 0; this.setState(ST.SUPER);
+          game.hitStop = 8; game.flash = 0.5;
+          world.impact(this.x + this.facing * 44, GROUND - 72, true);
+          break;
+        }
         if (pad.jab)   { this.setState(ST.JAB);   break; }
         if (pad.heavy) { this.setState(ST.HEAVY); break; }
         if (pad.kick)  { this.setState(ST.KICK);  break; }
@@ -1539,6 +1552,16 @@ class Fighter {
           world.tryHit(this, opp, a);
         }
         if (this.t >= total) this.setState(ST.IDLE);
+        break;
+      }
+      case ST.SUPER: {
+        this.vx = this.facing * 2.4;                 // рывок вперёд
+        const tot = SUPER_ATK.startup + SUPER_ATK.active + SUPER_ATK.recover;
+        if (this.t > SUPER_ATK.startup &&
+            this.t <= SUPER_ATK.startup + SUPER_ATK.active && !this.hitLanded) {
+          world.tryHit(this, opp, SUPER_ATK);
+        }
+        if (this.t >= tot) this.setState(ST.IDLE);
         break;
       }
       case ST.JUMP: {   // лёгкое управление в воздухе
@@ -1649,6 +1672,8 @@ class Fighter {
         return (this.t > ATK.jab.startup) ? "throwA" : "idle";
       case ST.HEAVY:
         return (this.t > ATK.heavy.startup) ? "punchB" : "idle";
+      case ST.SUPER:
+        return (this.t > SUPER_ATK.startup) ? "punchB" : "blockA";
       case ST.WEAPON: {
         const wp = WEAPONS[this.weapon];
         const strike = (wp.type === "melee")
@@ -1885,6 +1910,10 @@ const world = {
         ? Object.assign({}, a, { dmg: Math.round(a.dmg * attacker.dmgMul) }) : a;
       const hit = defender.applyHit(eff, attacker.x);
       if (hit) {
+        attacker.combo++; attacker.comboTimer = 90;
+        attacker.superMeter = Math.min(SUPER_MAX, attacker.superMeter + 12);
+        defender.combo = 0;
+        defender.superMeter = Math.min(SUPER_MAX, defender.superMeter + 8);
         this.impact(defender.x + defender.facing * -10, GROUND - a.box.fy - 10, a.knockdown);
         this.shake = a.knockdown ? 10 : 6;
       }
@@ -2035,6 +2064,10 @@ const world = {
         const fake = { dmg: Math.round(pr.dmg * pj.owner.dmgMul),
                        kb: pr.kb, stun: pr.stun, knockdown: false };
         if (target.applyHit(fake, pj.x - pj.vx * 4)) {
+          pj.owner.combo++; pj.owner.comboTimer = 90;
+          pj.owner.superMeter = Math.min(SUPER_MAX, pj.owner.superMeter + 8);
+          target.combo = 0;
+          target.superMeter = Math.min(SUPER_MAX, target.superMeter + 6);
           this.impact(pj.x, pj.y, false);
           this.shake = 4;
         }
@@ -2172,6 +2205,7 @@ const game = {
     this.p2.dmgMul = this.vsMode ? this.p1.dmgMul : 1;
     this.p1.fx = SKIN_FX[profile.skin].fx;
     this.p2.fx = this.vsMode ? SKIN_FX[profile.skin2].fx : null;
+    for (const f of [this.p1, this.p2]) { f.superMeter = 0; f.combo = 0; f.comboTimer = 0; }
     this.p1.reset(620, 1); this.p2.reset(1300, -1);
     const sane = (eq, hero) => (eq === "hook" &&
       profile.owned.indexOf("hook") < 0 && !HEROES[hero].hook) ? "fist" : eq;
@@ -2502,11 +2536,27 @@ const game = {
     const w1 = bw * this.p1.hp / this.p1.maxHp, w2 = bw * this.p2.hp / this.p2.maxHp;
     ctx.fillRect(30 + (bw - w1), 26, w1, bh);
     ctx.fillRect(W - 30 - bw, 26, w2, bh);
+    const sy = 50, sh = 7;                    // супер-шкала (v0.14)
+    ctx.fillStyle = "#191722";
+    ctx.fillRect(30, sy, bw, sh); ctx.fillRect(W - 30 - bw, sy, bw, sh);
+    const sf1 = this.p1.superMeter >= SUPER_MAX, sf2 = this.p2.superMeter >= SUPER_MAX;
+    ctx.fillStyle = sf1 ? "#ffe23a" : "#7ec8ff";
+    ctx.fillRect(30, sy, bw * Math.min(1, this.p1.superMeter / SUPER_MAX), sh);
+    ctx.fillStyle = sf2 ? "#ffe23a" : "#7ec8ff";
+    ctx.fillRect(W - 30 - bw, sy, bw * Math.min(1, this.p2.superMeter / SUPER_MAX), sh);
     ctx.font = "bold 18px 'Courier New', monospace";
     ctx.fillStyle = "#f2ead8"; ctx.textAlign = "left";
     ctx.fillText(this.p1.name + "  " + this.p1.hp + "/" + this.p1.maxHp, 32, 70);
     ctx.textAlign = "right";
     ctx.fillText(this.p2.hp + "/" + this.p2.maxHp + "  " + this.p2.name, W - 32, 70);
+    if (this.p1.combo >= 2) {
+      ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "left";
+      ctx.fillStyle = "#ffd84a"; ctx.fillText("КОМБО ×" + this.p1.combo, 32, 96);
+    }
+    if (this.p2.combo >= 2) {
+      ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "right";
+      ctx.fillStyle = "#ffd84a"; ctx.fillText("КОМБО ×" + this.p2.combo, W - 32, 96);
+    }
     for (let i = 0; i < WINS_NEEDED; i++) {
       ctx.fillStyle = (this.wins[0] > i) ? "#e8c15a" : "#3a3c58";
       ctx.fillRect(W / 2 - 40 - i * 22, 28, 14, 14);
@@ -2549,8 +2599,9 @@ const game = {
     ctx.font = "bold 16px 'Courier New', monospace"; ctx.textAlign = "center";
     for (let i = 0; i < TBTNS.length; i++) {
       const r = tbtnRect(i), on = touchPad[TBTNS[i].a];
-      ctx.globalAlpha = on ? 0.6 : 0.26;
-      ctx.fillStyle = on ? "#e8c15a" : "#cfd2e8";
+      const ready = TBTNS[i].a === "super" && this.p1.superMeter >= SUPER_MAX;
+      ctx.globalAlpha = on ? 0.65 : ready ? 0.55 : 0.26;
+      ctx.fillStyle = (on || ready) ? "#e8c15a" : "#cfd2e8";
       ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = "#0d0e18";
@@ -2658,7 +2709,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.13 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.14 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
