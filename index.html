@@ -8,7 +8,7 @@
   html,body{margin:0;padding:0;background:#0d0e18;color:#cfd2e8;
     font-family:"Courier New",monospace;height:100%;}
   .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;}
-  canvas{width:min(100%,960px);touch-action:none;image-rendering:pixelated;image-rendering:crisp-edges;
+  canvas{width:min(100%,1600px);max-height:96vh;touch-action:none;image-rendering:pixelated;image-rendering:crisp-edges;
     border:3px solid #2a2c44;border-radius:6px;background:#000;}
   .hint{font-size:13px;opacity:.7;text-align:center;}
 </style>
@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.17 — проект Пети
+   SAMURAI DUEL v0.18 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -97,7 +97,7 @@ const ctx = cv.getContext("2d");
 /* HiDPI (v0.6): холст во «внутреннем» разрешении экрана — чётче на
    Retina/iPad. Игра рисует в координатах 960x540, масштаб задаёт
    setTransform в главном цикле. */
-const DPR = Math.min(2, Math.max(1, Math.round(window.devicePixelRatio || 1)));
+const DPR = Math.min(3, Math.max(1, Math.round(window.devicePixelRatio || 1)));
 cv.width = W * DPR; cv.height = H * DPR;
 ctx.imageSmoothingEnabled = false;
 
@@ -1222,6 +1222,63 @@ const ARENA = {
   drawFloor() {                            // пол в мировых координатах
     for (let tx = 0; tx < WORLD_W; tx += W)
       ctx.drawImage(this.buf, 0, 92, 240, 43, tx, 368, W, 172);
+    this.drawFloorTexture();
+  },
+  drawFloorTexture() {                     // чёткая текстура поверх пола (v0.18)
+    const m = game.mode;
+    if (m === "menu" || m === "shop" || m === "cups" || m === "outfit" ||
+        m === "skins" || m === "heroes" || m === "power") return;
+    const decor = (THEMES[game.arenaIdx] || THEMES[0]).decor;
+    const y0 = 372, GW2 = WORLD_W;
+    if (decor === "torii") {                       // деревянные доски
+      ctx.strokeStyle = "rgba(60,40,24,0.26)"; ctx.lineWidth = 2;
+      for (let y = y0 + 14; y < 540; y += 26) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(GW2, y); ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(60,40,24,0.15)"; ctx.lineWidth = 1;
+      for (let y = y0; y < 540; y += 26) {
+        const off = (((y - y0) / 26) | 0) % 2 ? 70 : 0;
+        for (let x = off; x < GW2; x += 140) {
+          ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 26); ctx.stroke();
+        }
+      }
+    } else if (decor === "bamboo") {               // трава
+      ctx.strokeStyle = "rgba(40,95,30,0.34)"; ctx.lineWidth = 2;
+      for (let x = 0; x < GW2; x += 18) {
+        const h = 9 + (x * 7 % 10);
+        ctx.beginPath(); ctx.moveTo(x, y0 + 8); ctx.lineTo(x + 2, y0 + 8 - h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x + 8, y0 + 8); ctx.lineTo(x + 6, y0 + 8 - h * 0.7); ctx.stroke();
+      }
+    } else if (decor === "snow") {                 // снежная крошка
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      for (let x = 0; x < GW2; x += 13)
+        for (let y = y0 + 8; y < 540; y += 17)
+          ctx.fillRect(x + (y * 3 % 8), y + (x * 5 % 6), 2, 2);
+    } else if (decor === "cactus") {               // песчаная рябь
+      ctx.strokeStyle = "rgba(150,110,60,0.28)"; ctx.lineWidth = 2;
+      for (let y = y0 + 12; y < 540; y += 22) {
+        ctx.beginPath();
+        for (let x = 0; x <= GW2; x += 26) ctx.lineTo(x, y + Math.sin(x * 0.03) * 3);
+        ctx.stroke();
+      }
+    } else if (decor === "volcano") {              // трещины + угли
+      ctx.strokeStyle = "rgba(0,0,0,0.42)"; ctx.lineWidth = 2;
+      for (let x = 40; x < GW2; x += 150) {
+        ctx.beginPath(); ctx.moveTo(x, y0);
+        ctx.lineTo(x + 20, y0 + 42); ctx.lineTo(x + 8, y0 + 92); ctx.stroke();
+      }
+      ctx.fillStyle = "rgba(255,90,30,0.45)";
+      for (let x = 0; x < GW2; x += 64)
+        for (let y = y0 + 22; y < 540; y += 42) ctx.fillRect(x + (y % 30), y, 2, 2);
+    } else if (decor === "city") {                 // плитка
+      ctx.strokeStyle = "rgba(255,255,255,0.09)"; ctx.lineWidth = 1;
+      for (let x = 0; x < GW2; x += 64) {
+        ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, 540); ctx.stroke();
+      }
+      for (let y = y0 + 22; y < 540; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(GW2, y); ctx.stroke();
+      }
+    }
   }
 };
 ARENA.init();
@@ -2856,7 +2913,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.17 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.18 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
