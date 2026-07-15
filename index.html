@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.22 — проект Пети
+   SAMURAI DUEL v0.23 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -843,6 +843,15 @@ const HEADS = {
     "kkkk...kkkk",
     ".kk.....kk.",
   ]},
+  cyborg: { x: 6, y: 3, rows: [        // шлем киборга с гребнем (v0.23)
+    "....h.h.h....",
+    "...hhhhhhh...",
+    ".hhhhhhhhhhh.",
+    "hhhhhhhhhhhhh",
+    "hhhhhhhhhhhhh",
+    "hhhhhhhhhhhhh",
+    "hhhhhhhhhhhhh",
+  ]},
   plain: null,                         // Крокодайл — без убора
 };
 /* смещение головы в кадрах, где боец наклонён; null — не рисовать */
@@ -892,6 +901,8 @@ const HEROES = [   /* тело, телосложение (v0.12) + атрибу�
     body:{ s:"#d0463a", d:"#a02c28" } },
   { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4", bx:1.18, by:0.98, acc:"bamboo",
     body:{ s:"#e8e8ee", d:"#c0c0cc" } },
+  { name:"КИБОРГ",    head:"cyborg",  hair:"#9aa8c0", bx:1.05, by:1.02, acc:"sash",
+    body:{ s:"#8a95ab", d:"#5a637a" } },
 ];
 const PAL = {
   p1: Object.assign({}, BASE, { h:"#f8e040" }, OUTFITS[0]),
@@ -1452,15 +1463,19 @@ const WEAPONS = {
   fireball: { title:"ОГНЕННЫЙ ШАР", price:130, type:"proj", dmg:15, startup:16,
               recover:22, cooldown:60, proj:"fireball",
               frames:["bowA","bowA"], desc:"огненный шар, большой урон" },
+  boomerang:{ title:"БУМЕРАНГ", price:120, type:"proj", dmg:12, startup:12,
+              recover:20, cooldown:80, proj:"boomerang",
+              frames:["throwA","throwA"], desc:"летит вперёд и возвращается" },
 };
 const WEAPON_ORDER = ["katana", "hook", "nunchaku", "naginata", "hammer",
-                      "bow", "kunai", "fireball"];
+                      "bow", "kunai", "boomerang", "fireball"];
 const PROJ = {
   shuriken: { dmg: DMG.shuriken, kb: 3, stun: 12, speed: 7.5, size: 16 },
   arrow:    { dmg: WEAPONS.bow.dmg, kb: 5, stun: 16, speed: 11, size: 14 },
   kunai:    { dmg: WEAPONS.kunai.dmg, kb: 4, stun: 14, speed: 13, size: 12 },
   fireball: { dmg: WEAPONS.fireball.dmg, kb: 6, stun: 18, speed: 8, size: 22 },
   beam:     { dmg: 28, kb: 13, stun: 26, speed: 13, size: 34 },
+  boomerang:{ dmg: WEAPONS.boomerang.dmg, kb: 5, stun: 16, speed: 11, size: 18 },
 };
 
 /* ---------- СОХРАНЕНИЕ (монеты и купленное) ------------------
@@ -1561,6 +1576,7 @@ const HERO_ULTS = [
   { name:"УДАР СЁГУНА",    kind:"melee", dmg:32, hits:1, kb:16, stun:30, knockdown:true,  dash:1.0, col:"#ffd23a", box:{fx:0, fy:20, w:152, h:82} },
   { name:"ОГНЕННЫЙ ТАРАН", kind:"melee", dmg:38, hits:1, kb:22, stun:30, knockdown:true,  dash:7.0, col:"#ff6a28", box:{fx:8, fy:34, w:100, h:70} },
   { name:"КАТЯЩИЙ УДАР",   kind:"melee", dmg:11, hits:3, kb:7,  stun:18, knockdown:false, dash:6.0, col:"#f0f0f4", box:{fx:6, fy:20, w:96,  h:78} },
+  { name:"РАЗРЯД",         kind:"beam",  dmg:26,          kb:12, stun:24, knockdown:false,           col:"#7ec8ff" },
 ];
 
 class Fighter {
@@ -2122,7 +2138,7 @@ const world = {
     this.projectiles.push({
       kind: kind,
       x: f.x + f.facing * 44, y: GROUND - 74,
-      vx: f.facing * pr.speed, owner: f, alive: true, t: 0
+      vx: f.facing * pr.speed, dir: f.facing, owner: f, alive: true, t: 0
     });
   },
 
@@ -2256,7 +2272,11 @@ const world = {
     }
     this.chips = this.chips.filter(c => c.t < 30 && c.y < GROUND + 10);
     for (const pj of this.projectiles) {
-      pj.t++; pj.x += pj.vx;
+      pj.t++;
+      if (pj.kind === "boomerang") {      // тормозит и возвращается
+        pj.vx -= pj.dir * 0.42; if (pj.t > 90) pj.alive = false;
+      }
+      pj.x += pj.vx;
       if (pj.x < -40 || pj.x > W + 40) pj.alive = false;
       const pr = PROJ[pj.kind];
       const target = this.opponent(pj.owner);
@@ -2347,6 +2367,13 @@ const world = {
         ctx.beginPath(); ctx.ellipse(0, 0, 19, 12, 0, 0, 7); ctx.fill();
         ctx.fillStyle = "#ffffff";
         ctx.beginPath(); ctx.ellipse(-5, 0, 9, 7, 0, 0, 7); ctx.fill();
+        ctx.restore();
+      } else if (pj.kind === "boomerang") {
+        ctx.save(); ctx.translate(pj.x, pj.y); ctx.rotate(pj.t * 0.5);
+        ctx.strokeStyle = "#c8a060"; ctx.lineWidth = 5; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(-9, -9); ctx.lineTo(1, 1); ctx.lineTo(9, -9); ctx.stroke();
+        ctx.strokeStyle = "#8a6a38"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-9, -9); ctx.lineTo(1, 1); ctx.lineTo(9, -9); ctx.stroke();
         ctx.restore();
       } else {
         ctx.save();
@@ -2934,7 +2961,7 @@ const game = {
   },
 
   heroCardRect(i) {
-    const n = HEROES.length, cw = 116, gap = 8;
+    const n = HEROES.length, cw = 104, gap = 6;
     const x0 = (W - (n * (cw + gap) - gap)) / 2;
     return { x: x0 + i * (cw + gap), y: 160, w: cw, h: 182 };
   },
@@ -2966,7 +2993,7 @@ const game = {
       ctx.strokeStyle = sel ? "#e8c15a" : (i === cur ? "#7ec8ff" : "#3a3c58");
       ctx.lineWidth = sel ? 3 : 2;
       ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
-      const cw = GW * 3 * (h.bx || 1);
+      const cw = Math.min(r.w - 10, GW * 3 * (h.bx || 1));
       ctx.drawImage(heroPreview(i, oi),
                     r.x + (r.w - cw) / 2, r.y + 6, cw, GH * 3);
       ctx.font = "bold 14px 'Courier New', monospace"; ctx.textAlign = "center";
@@ -3046,7 +3073,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.22 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.23 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
