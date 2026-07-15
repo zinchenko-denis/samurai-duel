@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.21 — проект Пети
+   SAMURAI DUEL v0.22 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1730,6 +1730,10 @@ class Fighter {
     if (this.yOff < 0 || this.vy !== 0) {   // гравитация (низкая при невесомости)
       this.vy += (profile.lowGrav ? 0.2 : 0.7); this.yOff += this.vy;
       if (this.yOff >= 0) {
+        if (this.vy > 3) {                              // приземление — пыль (v0.22)
+          world.rings.push({ x: this.x - 9, y: GROUND + 4, t: 0, max: 20, col: "rgba(210,200,180,0.5)" });
+          world.rings.push({ x: this.x + 9, y: GROUND + 4, t: 0, max: 20, col: "rgba(210,200,180,0.5)" });
+        }
         this.yOff = 0; this.vy = 0;
         if (this.state === ST.JUMP) this.setState(ST.IDLE);
       }
@@ -1978,6 +1982,18 @@ class Fighter {
       if (this.facing < 0) ctx.scale(-1, 1);
       ctx.drawImage(HOOK_IMG, -10, -10, 21, 21);
       ctx.restore();
+    }
+    if ((this.state === ST.HEAVY || this.state === ST.SUPER ||
+         (this.state === ST.WEAPON && WEAPONS[this.weapon] &&
+          WEAPONS[this.weapon].type === "melee")) && this.t > 5 && this.t < 18) {
+      const p = (this.t - 5) / 13, cx = this.x + this.facing * 34, cy = GROUND - 78 + this.yOff;
+      ctx.strokeStyle = "rgba(235,242,255," + (0.55 * (1 - p)).toFixed(2) + ")";
+      ctx.lineWidth = 7 * (1 - p) + 2; ctx.lineCap = "round";
+      const a0 = -1.2 + p * 2.0;
+      ctx.beginPath();
+      if (this.facing > 0) ctx.arc(cx, cy, 46, a0, a0 + 0.6);
+      else ctx.arc(cx, cy, 46, Math.PI - a0 - 0.6, Math.PI - a0);
+      ctx.stroke();
     }
     this.drawAura(true);             // искры скина поверх бойца
   }
@@ -2701,6 +2717,10 @@ const game = {
         this.mode === "skins" || this.mode === "heroes" ||
         this.mode === "power") return;
     if (this.flash > 0) this.flash -= 0.05;
+    if (FIGHT_MODES[this.mode] && THEMES[this.arenaIdx] &&
+        THEMES[this.arenaIdx].decor === "city" && Math.random() < 0.004) {
+      this.flash = Math.max(this.flash, 0.35); SND.noise(0.5, 0.22, 340);   // молния + гром
+    }
     if (this.hitStop > 0) { this.hitStop--; return; }   // микро-заморозка удара
     if (this.mode === "intro") {
       if (--this.timer <= 0) { this.mode = "fight"; this.timer = 45; }
@@ -2732,6 +2752,8 @@ const game = {
             if (this.isNight()) this.awardCup("night");
           }
         } else { this.wins[1]++; this.msg = this.p2.name + " ПОБЕЖДАЕТ"; }
+        if ((this.tower && this.tower.on) || this.wins[0] >= WINS_NEEDED ||
+            this.wins[1] >= WINS_NEEDED) game.slowmo = 45;
       }
     } else if (this.mode === "ko") {
       if (--this.timer <= 0) {
@@ -2787,7 +2809,7 @@ const game = {
     else if (th.decor === "snow") { mode = "snow"; target = 44; }
     else if (th.decor === "volcano") { mode = "ember"; target = 36; }
     else if (th.decor === "cactus") { mode = "sand"; target = 30; }
-    else if (th.decor === "city") { mode = night ? "firefly" : "dust"; target = 30; }
+    else if (th.decor === "city") { mode = "rain"; target = 90; }
     while (this.ambient.length < target)
       this.ambient.push({ x: Math.random() * W, y: Math.random() * H,
                           s: Math.random(), m: mode });
@@ -2799,12 +2821,18 @@ const game = {
       else if (mode === "ember") { p.x += Math.sin(p.y * 0.05) * 0.6; p.y -= 0.7 + p.s; }
       else if (mode === "sand") { p.x += 1.6 + p.s; p.y += Math.sin(p.x * 0.02) * 0.3; }
       else if (mode === "firefly") { p.x += Math.sin(p.y * 0.05 + p.s * 6) * 0.5; p.y += Math.cos(p.x * 0.05) * 0.4; }
+      else if (mode === "rain") { p.x -= 3; p.y += 16; }
       else { p.x += 0.25; p.y -= 0.05; }
       if (p.y > H + 12) { p.y = -12; p.x = Math.random() * W; }
       if (p.y < -12) { p.y = H + 12; p.x = Math.random() * W; }
       if (p.x > W + 12) p.x = -12;
       if (p.x < -12) p.x = W + 12;
       let col, sz;
+      if (mode === "rain") {
+        ctx.strokeStyle = "rgba(165,185,225,0.5)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - 2, p.y + 9); ctx.stroke();
+        continue;
+      }
       if (mode === "snow") { col = "rgba(240,246,255,0.85)"; sz = 2 + p.s * 2; }
       else if (mode === "leaf") { col = "rgba(120,175,80,0.70)"; sz = 3 + p.s * 2; }
       else if (mode === "ember") {
@@ -3018,7 +3046,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.21 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.22 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -3375,7 +3403,8 @@ let last = performance.now(), acc = 0;
 function loop(now) {
   acc += Math.min(100, now - last);
   last = now;
-  while (acc >= STEP) { game.tick(); acc -= STEP; }
+  const step = game.slowmo > 0 ? STEP * 3 : STEP;
+  while (acc >= step) { game.tick(); acc -= step; if (game.slowmo > 0) game.slowmo--; }
   SND.updateMusic();
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // HiDPI-масштаб (v0.6)
   ctx.imageSmoothingEnabled = false;
