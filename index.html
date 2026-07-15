@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.16 — проект Пети
+   SAMURAI DUEL v0.17 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -71,6 +71,16 @@ const TOWER_STAGES = [
   { hero: 3, name: "КРОКОДАЙЛ", hp: 120, dmg: 1.15, diff: 1, skin: 0, weapon: "hook" },
   { hero: 4, name: "СЁГУН",     hp: 145, dmg: 1.30, diff: 1, skin: 4, weapon: "naginata" },
   { hero: 5, name: "ОНИ",       hp: 185, dmg: 1.50, diff: 2, skin: 3, weapon: "hammer" },
+];
+/* ИСПЫТАНИЯ: одноразовые задания за монеты (v0.17) */
+const CHALLENGES = [
+  { id:"win1",       name:"Первая победа над Сенсеем",   reward:20 },
+  { id:"perfect",    name:"Выиграть раунд без урона",    reward:30 },
+  { id:"flawless",   name:"Выиграть матч 3:0",           reward:30 },
+  { id:"combo5",     name:"Собрать комбо ×5",            reward:25 },
+  { id:"ultkill",    name:"Добить соперника ультой",     reward:30 },
+  { id:"tower3",     name:"Дойти до 3 этажа Башни",      reward:30 },
+  { id:"towerclear", name:"Пройти всю Башню (5 боссов)", reward:60 },
 ];
 
 /* ---------- КОНСТАНТЫ ЭКРАНА -------------------------------- */
@@ -1414,6 +1424,8 @@ profile.winStreak = profile.winStreak || 0;
 if (!profile.trophies) profile.trophies = [];
 if (profile.cups === undefined) profile.cups = 0;
 if (profile.towerBest === undefined) profile.towerBest = 0;
+if (profile.endlessBest === undefined) profile.endlessBest = 0;
+if (!profile.challenges) profile.challenges = {};
 function cupRank(c) {           // ранг по очкам кубков (v0.11)
   const tiers = [
     [0, "ДЕРЕВО", "#b0895a"], [10, "БРОНЗА", "#c9803a"],
@@ -1947,6 +1959,9 @@ const world = {
         attacker.superMeter = Math.min(SUPER_MAX, attacker.superMeter + 12);
         defender.combo = 0;
         defender.superMeter = Math.min(SUPER_MAX, defender.superMeter + 8);
+        if (attacker.ctrl.human && attacker.combo >= 5) game.doChallenge("combo5");
+        if (defender.state === ST.KO && attacker.ctrl.human &&
+            attacker.state === ST.SUPER) game.doChallenge("ultkill");
         this.impact(defender.x + defender.facing * -10, GROUND - a.box.fy - 10, a.knockdown);
         this.shake = a.knockdown ? 10 : 6;
       }
@@ -2105,6 +2120,8 @@ const world = {
           pj.owner.superMeter = Math.min(SUPER_MAX, pj.owner.superMeter + 8);
           target.combo = 0;
           target.superMeter = Math.min(SUPER_MAX, target.superMeter + 6);
+          if (target.state === ST.KO && pj.kind === "beam" && pj.owner.ctrl.human)
+            game.doChallenge("ultkill");
           this.impact(pj.x, pj.y, false);
           this.shake = 4;
         }
@@ -2249,10 +2266,20 @@ const game = {
   },
 
   startTower() { this.startTowerStage(0); },
+  towerBoss(s) {                              // конфиг босса: именной или процедурный (v0.17)
+    if (s < TOWER_STAGES.length) return TOWER_STAGES[s];
+    const hero = Math.floor(Math.random() * HEROES.length);
+    const skins = [1, 2, 3, 4, 5], wpns = ["katana", "hammer", "naginata", "hook", "fireball"];
+    const w = s - TOWER_STAGES.length;        // 0,1,2,... волна сверх 5-го босса
+    return { hero: hero, name: HEROES[hero].name,
+             hp: 160 + w * 28, dmg: 1.45 + w * 0.14, diff: 2,
+             skin: skins[(Math.random() * skins.length) | 0],
+             weapon: wpns[(Math.random() * wpns.length) | 0] };
+  },
   startTowerStage(s) {
-    const st = TOWER_STAGES[s];
+    const st = this.towerBoss(s);
     this.vsMode = false;
-    this.tower = { on: true, stage: s };
+    this.tower = { on: true, stage: s, st: st };
     this.wins = [0, 0]; this.round = 1; this.matchPaid = true;
     this.cupDelta = undefined;
     this.arenaIdx = s % THEMES.length;
@@ -2261,7 +2288,7 @@ const game = {
     this.p1.name = HEROES[profile.hero].name;
     this.p2.name = st.name;
     this.p2.pal  = "p2c";
-    this.applyBossStage(s);
+    this.applyBossStage();
     this.p1.hook = !!HEROES[profile.hero].hook;
     this.p2.hook = !!HEROES[st.hero].hook;
     this.p1.bx = HEROES[profile.hero].bx || 1;
@@ -2275,8 +2302,8 @@ const game = {
     this.p2.weapon = st.weapon;
     this.p2.fx = SKIN_FX[st.skin].fx;         // аура босса
   },
-  applyBossStage(s) {                         // облик босса строим в палитре p2c
-    const st = TOWER_STAGES[s];
+  applyBossStage() {                          // облик босса строим в палитре p2c
+    const st = this.tower.st;
     const h2 = profile.hero2, sk2 = profile.skin2, o2 = profile.outfit2;
     profile.hero2 = st.hero; profile.skin2 = st.skin; profile.outfit2 = 0;
     applyOutfit2();
@@ -2284,16 +2311,31 @@ const game = {
   },
   resolveTower() {
     if (this.p1.state === ST.KO) { this.tower.on = false; this.mode = "towerfail"; return; }
-    const s = this.tower.stage;
-    if (s + 1 > (profile.towerBest || 0)) profile.towerBest = s + 1;
+    const s = this.tower.stage, LAST = TOWER_STAGES.length - 1;
     profile.coins += 15; profile.power.pts += 1;
-    if (s >= TOWER_STAGES.length - 1) {
-      profile.cups += 15; profile.coins += 30; saveProfile();
-      this.tower.on = false; this.mode = "towerwin";
-    } else {
-      saveProfile();
-      this.startTowerStage(s + 1);
+    if (s < TOWER_STAGES.length && s + 1 > (profile.towerBest || 0)) profile.towerBest = s + 1;
+    if (s + 1 >= 3) this.doChallenge("tower3");
+    if (s === LAST) {                         // повержен 5-й именной босс
+      profile.cups += 15; profile.coins += 30;
+      this.doChallenge("towerclear");
+      world.floater(W / 2, 150, "БАШНЯ ПРОЙДЕНА! ДАЛЬШЕ — БЕСКОНЕЧНО", "#ffd98a", true);
     }
+    if (s >= TOWER_STAGES.length) {           // волна бесконечного режима
+      const wave = s - TOWER_STAGES.length + 1;
+      if (wave > (profile.endlessBest || 0)) profile.endlessBest = wave;
+    }
+    saveProfile();
+    this.startTowerStage(s + 1);
+  },
+  doChallenge(id) {
+    if (!profile.challenges) profile.challenges = {};
+    if (profile.challenges[id]) return;
+    const ch = CHALLENGES.find(c => c.id === id);
+    if (!ch) return;
+    profile.challenges[id] = true;
+    profile.coins += ch.reward;
+    world.floater(W / 2, 188, "ИСПЫТАНИЕ ✔ " + ch.name + "  +" + ch.reward, "#9be07a", true);
+    saveProfile();
   },
   newRound() {
     /* очки силы (v0.7): здоровье и урон живых игроков */
@@ -2538,7 +2580,7 @@ const game = {
             profile.coins += COIN_ROUND; saveProfile();
             world.floater(W / 2, 150, "+" + COIN_ROUND + " монет", "#e8c15a");
             this.gainXp(XP_ROUND);
-            if (this.p1.hp === this.p1.maxHp) this.awardCup("perfect");
+            if (this.p1.hp === this.p1.maxHp) this.doChallenge("perfect");
             if (this.isNight()) this.awardCup("night");
           }
         } else { this.wins[1]++; this.msg = this.p2.name + " ПОБЕЖДАЕТ"; }
@@ -2558,6 +2600,8 @@ const game = {
             const cd = lost === 0 ? 10 : lost === 1 ? 5 : 1;
             profile.cups += cd; this.cupDelta = cd;
             world.floater(W / 2, 158, "+" + cd + " КУБКОВ", "#ffd98a");
+            this.doChallenge("win1");
+            if (lost === 0) this.doChallenge("flawless");
             saveProfile();
           } else if (!this.vsMode && this.wins[1] >= WINS_NEEDED && !this.matchPaid) {
             this.matchPaid = true;
@@ -2812,7 +2856,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.16 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.17 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2945,42 +2989,35 @@ const game = {
   },
 
   drawCups() {
-    ctx.fillStyle = "rgba(10,10,22,0.84)"; ctx.fillRect(0, 0, W, H);
-    this.banner("КУБКИ", 52, 88);
+    ctx.fillStyle = "rgba(10,10,22,0.86)"; ctx.fillRect(0, 0, W, H);
+    this.banner("КУБКИ И ИСПЫТАНИЯ", 40, 58);
     const rank = cupRank(profile.cups);
-    ctx.drawImage(CUP_IMG, W / 2 - 96, 118, 62, 51);
-    ctx.font = "bold 62px 'Courier New', monospace"; ctx.textAlign = "left";
-    ctx.fillStyle = "#ffd98a"; ctx.fillText(String(profile.cups), W / 2 - 18, 166);
-    ctx.font = "bold 30px 'Courier New', monospace"; ctx.textAlign = "center";
-    ctx.fillStyle = rank.color; ctx.fillText("РАНГ: " + rank.name, W / 2, 214);
-    if (rank.next) {
-      ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
-      ctx.fillText("до ранга " + rank.nextName + ": ещё " +
-                   (rank.next - profile.cups) + " кубков", W / 2, 240);
-      ctx.fillStyle = "#191722"; ctx.fillRect(W / 2 - 150, 250, 300, 12);
-      ctx.fillStyle = rank.color; ctx.fillRect(W / 2 - 148, 252, 296 * rank.prog, 8);
-    } else {
-      ctx.font = "15px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
-      ctx.fillText("максимальный ранг!", W / 2, 240);
-    }
-    ctx.font = "bold 19px 'Courier New', monospace"; ctx.textAlign = "left";
-    ctx.fillStyle = "#f2ead8";
-    ctx.fillText("КАК КОПЯТСЯ КУБКИ (в боях с СЕНСЕЕМ):", W / 2 - 250, 322);
-    const rules = [["победа 3:0 — без поражений", "+10", "#9be07a"],
-                   ["победа 3:1", "+5", "#9be07a"],
-                   ["победа 3:2", "+1", "#9be07a"],
-                   ["поражение", "−5", "#ff8a8a"]];
+    ctx.drawImage(CUP_IMG, W / 2 - 200, 84, 40, 33);
+    ctx.font = "bold 34px 'Courier New', monospace"; ctx.textAlign = "left";
+    ctx.fillStyle = "#ffd98a"; ctx.fillText(String(profile.cups), W / 2 - 152, 112);
+    ctx.font = "bold 22px 'Courier New', monospace";
+    ctx.fillStyle = rank.color; ctx.fillText("РАНГ: " + rank.name, W / 2 - 72, 112);
+    ctx.font = "13px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
+    ctx.textAlign = "center";
+    ctx.fillText("кубки за бои с Сенсеем: 3:0 +10 · 3:1 +5 · 3:2 +1 · проигрыш −5",
+                 W / 2, 138);
+    const done = CHALLENGES.filter(c => profile.challenges && profile.challenges[c.id]).length;
+    ctx.font = "bold 19px 'Courier New', monospace"; ctx.fillStyle = "#f2ead8";
+    ctx.textAlign = "left";
+    ctx.fillText("ИСПЫТАНИЯ (" + done + "/" + CHALLENGES.length + "):", W / 2 - 300, 174);
     ctx.font = "17px 'Courier New', monospace";
-    for (let i = 0; i < rules.length; i++) {
-      const y = 354 + i * 32;
-      ctx.textAlign = "left"; ctx.fillStyle = "#cdd3ea";
-      ctx.fillText("• " + rules[i][0], W / 2 - 230, y);
-      ctx.textAlign = "right"; ctx.fillStyle = rules[i][2];
-      ctx.fillText(rules[i][1] + " кубков", W / 2 + 250, y);
+    for (let i = 0; i < CHALLENGES.length; i++) {
+      const c = CHALLENGES[i], ok = profile.challenges && profile.challenges[c.id];
+      const y = 202 + i * 30;
+      ctx.textAlign = "left"; ctx.fillStyle = ok ? "#9be07a" : "#cdd3ea";
+      ctx.fillText((ok ? "✔ " : "○ ") + c.name, W / 2 - 300, y);
+      ctx.textAlign = "right"; ctx.fillStyle = ok ? "#6a8c58" : "#e8c15a";
+      ctx.fillText("+" + c.reward + " монет", W / 2 + 300, y);
     }
     ctx.font = "16px 'Courier New', monospace"; ctx.fillStyle = "#aab0d0";
     ctx.textAlign = "center";
-    ctx.fillText("ENTER или ESC — назад", W / 2, 504);
+    ctx.fillText("башня: этаж " + (profile.towerBest || 0) + "/5 · волн " +
+                 (profile.endlessBest || 0) + "    ·    ENTER — назад", W / 2, 502);
     world.drawFloaters();
   },
 
@@ -3040,8 +3077,10 @@ const game = {
 
     if (this.mode === "intro") {
       if (this.tower && this.tower.on) {
-        this.banner("ЭТАП " + (this.tower.stage + 1) + "/5", 60, 236);
-        this.banner("БОСС: " + TOWER_STAGES[this.tower.stage].name, 34, 288);
+        const s = this.tower.stage, bn = this.tower.st ? this.tower.st.name : "";
+        if (s < TOWER_STAGES.length) this.banner("ЭТАП " + (s + 1) + "/5", 60, 236);
+        else this.banner("ВОЛНА " + (s - TOWER_STAGES.length + 1), 60, 236);
+        this.banner("БОСС: " + bn, 34, 288);
       } else this.banner("РАУНД " + this.round, 64, 260);
       this.banner(THEMES[this.arenaIdx].name, 22, 300);
     }
@@ -3069,9 +3108,14 @@ const game = {
       this.banner("ENTER — в меню", 22, 350);
     }
     if (this.mode === "towerfail") {
-      this.banner("ЭТАП " + ((this.tower ? this.tower.stage : 0) + 1) + " — ПОРАЖЕНИЕ", 42, 226);
-      this.banner("рекорд: этап " + (profile.towerBest || 0) + "/5", 26, 272);
-      this.banner("ENTER — в меню", 22, 324);
+      const s = this.tower ? this.tower.stage : 0;
+      if (s < TOWER_STAGES.length)
+        this.banner("ЭТАП " + (s + 1) + " — ПОРАЖЕНИЕ", 42, 224);
+      else
+        this.banner("ВОЛНА " + (s - TOWER_STAGES.length + 1) + " — ПОРАЖЕНИЕ", 40, 224);
+      this.banner("рекорд: этаж " + (profile.towerBest || 0) + "/5 · волн " +
+                  (profile.endlessBest || 0), 22, 268);
+      this.banner("ENTER — в меню", 22, 320);
     }
     ctx.restore();
   }
