@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.20 — проект Пети
+   SAMURAI DUEL v0.21 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1310,6 +1310,7 @@ const KEYMAP2 = {
 const UIKEYS = { Enter:"ok", Space:"ok", ArrowUp:"up", KeyW:"up",
                  ArrowDown:"down", KeyS:"down", Escape:"back" };
 window.addEventListener("keydown", e => {
+  SND.unlock();
   if (KEYMAP1[e.code]) { keyPad1[KEYMAP1[e.code]] = true; e.preventDefault(); }
   if (KEYMAP2[e.code]) { keyPad2[KEYMAP2[e.code]] = true; e.preventDefault(); }
   if (UIKEYS[e.code]) {
@@ -1349,6 +1350,7 @@ function canvasXY(e) {
 }
 cv.addEventListener("pointerdown", e => {
   const p = canvasXY(e);
+  SND.unlock();
   if ((e.pointerType === "touch" || e.pointerType === "pen") &&
       FIGHT_MODES[game.mode]) {
     try { cv.setPointerCapture(e.pointerId); } catch (err) { /* ок */ }
@@ -1484,6 +1486,7 @@ if (profile.towerBest === undefined) profile.towerBest = 0;
 if (profile.endlessBest === undefined) profile.endlessBest = 0;
 if (!profile.challenges) profile.challenges = {};
 if (profile.lowGrav === undefined) profile.lowGrav = false;
+if (profile.sound === undefined) profile.sound = true;
 function cupRank(c) {           // ранг по очкам кубков (v0.11)
   const tiers = [
     [0, "ДЕРЕВО", "#b0895a"], [10, "БРОНЗА", "#c9803a"],
@@ -1622,6 +1625,7 @@ class Fighter {
           game.hitStop = 8; game.flash = 0.5;
           world.impact(this.x + this.facing * 44, GROUND - 72, true, ult.col);
           world.floater(this.x, GROUND - 168, ult.name + "!", ult.col, true);
+          SND.ult();
           break;
         }
         if (pad.jab)   { this.setState(ST.JAB);   break; }
@@ -1743,15 +1747,17 @@ class Fighter {
     if (this.state === ST.BLOCK && !a.knockdown) {   // щит! подножка пробивает
       this.vx = ((this.x >= fromX) ? 1 : -1) * (a.kb || 4) * 0.8;
       world.floater(this.x, GROUND - 150, "БЛОК", "#7ba4f0", true);
+      SND.block();
       return true;
     }
     this.hp = Math.max(0, this.hp - a.dmg);
     game.hitStop = Math.max(game.hitStop || 0, a.knockdown ? 7 : 4);
     world.floater(this.x, GROUND - 172, "-" + a.dmg, "#ff6a5e", true);
+    SND.hit(!!a.knockdown);
     this.flash = 5;
     const dir = (this.x >= fromX) ? 1 : -1;
     this.vx = dir * a.kb;
-    if (this.hp <= 0) { this.setState(ST.KO); return true; }
+    if (this.hp <= 0) { this.setState(ST.KO); SND.ko(); return true; }
     if (a.knockdown) { this.setState(ST.DOWN); }
     else { this.setState(ST.HIT); this.stunLeft = a.stun; if (profile.lowGrav) this.vy = -5; }
     return true;
@@ -2095,6 +2101,7 @@ const world = {
     }
   },
   spawnProjectile(f, kind) {
+    SND.proj();
     const pr = PROJ[kind];
     this.projectiles.push({
       kind: kind,
@@ -2219,7 +2226,7 @@ const world = {
         if (this.overlap(cbox, f.hurtbox())) {
           cd.alive = false;
           const gp = cd.rar.power;
-          profile.power.pts += gp; saveProfile();
+          profile.power.pts += gp; saveProfile(); SND.pickup();
           this.floater(cd.x, cd.y - 26,
             "+" + gp + (gp === 1 ? " СИЛА" : gp < 5 ? " СИЛЫ" : " СИЛ"),
             cd.rar.color, true);
@@ -2524,11 +2531,17 @@ const game = {
   awardCup(id) { /* достижения заменены на очки кубков (v0.11) */ },
 
   handleUI(ev) {
+    if (ev.type === "ok" || ev.type === "up" || ev.type === "down") SND.menu();
     if (this.mode === "menu") {
       const n = this.menuItems().length;
       if (ev.type === "up")   this.menuSel = (this.menuSel + n - 1) % n;
       if (ev.type === "down") this.menuSel = (this.menuSel + 1) % n;
       if (ev.type === "click") {
+        if (ev.x >= W - 60 && ev.x <= W - 20 && ev.y >= 22 && ev.y <= 50) {
+          profile.sound = !profile.sound; SND.on = profile.sound;
+          if (profile.sound) SND.unlock(); else SND.stopMusic();
+          saveProfile(); return;
+        }
         const hit = this.rowAt(ev.y, 162, 27, n);
         if (hit < 0) return;
         this.menuSel = hit; ev = { type: "ok" };
@@ -2710,7 +2723,7 @@ const game = {
         this.mode = "ko"; this.timer = 120; this.flash = 0.75;
         if (dead1 && dead2) this.msg = "НИЧЬЯ";
         else if (dead2) {
-          this.wins[0]++; this.msg = this.p1.name + " ПОБЕЖДАЕТ";
+          this.wins[0]++; this.msg = this.p1.name + " ПОБЕЖДАЕТ"; SND.win();
           if (!this.vsMode && !(this.tower && this.tower.on)) {
             profile.coins += COIN_ROUND; saveProfile();
             world.floater(W / 2, 150, "+" + COIN_ROUND + " монет", "#e8c15a");
@@ -2978,6 +2991,20 @@ const game = {
     ctx.fillStyle = "rgba(10,10,22,0.55)";
     ctx.fillRect(0, 0, W, H);
     this.banner("SAMURAI DUEL", 56, 140);
+    const sx = W - 52, sy = 38;              // иконка звука, тап — вкл/выкл
+    ctx.fillStyle = profile.sound ? "#e8c15a" : "#787c9c";
+    ctx.fillRect(sx, sy - 5, 6, 10);
+    ctx.beginPath(); ctx.moveTo(sx + 6, sy - 5); ctx.lineTo(sx + 13, sy - 11);
+    ctx.lineTo(sx + 13, sy + 11); ctx.lineTo(sx + 6, sy + 5); ctx.closePath(); ctx.fill();
+    if (profile.sound) {
+      ctx.strokeStyle = "#e8c15a"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx + 13, sy, 8, -0.6, 0.6); ctx.stroke();
+      ctx.beginPath(); ctx.arc(sx + 13, sy, 13, -0.7, 0.7); ctx.stroke();
+    } else {
+      ctx.strokeStyle = "#9498b8"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(sx + 18, sy - 6); ctx.lineTo(sx + 28, sy + 6);
+      ctx.moveTo(sx + 28, sy - 6); ctx.lineTo(sx + 18, sy + 6); ctx.stroke();
+    }
     const items = this.menuItems();
     ctx.font = "bold 21px 'Courier New', monospace"; ctx.textAlign = "center";
     for (let i = 0; i < items.length; i++) {
@@ -2991,7 +3018,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.20 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.21 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -3257,6 +3284,90 @@ const game = {
 };
 
 let cycleT = 900;   // старт суток — утро
+/* ---------- ЗВУК: синтез через Web Audio (v0.21) ------------
+   Всё генерируется в коде, файлы не нужны. Контекст запускается
+   по первому касанию/клавише (политика автозапуска браузеров). */
+const SND = {
+  ctx: null, master: null, musicGain: null, on: true, musicPlaying: false,
+  melodyPos: 0, nextNoteTime: 0,
+  MELODY: [[440,1],[392,1],[329.63,1],[392,1],[440,1],[523.25,2],[392,1],
+           [329.63,1],[293.66,1],[329.63,1],[392,1],[440,2],[0,2]],
+  BASS: [110, 146.83, 130.81, 98],
+  init() {
+    if (this.ctx) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC();
+      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
+      this.master.connect(this.ctx.destination);
+      this.musicGain = this.ctx.createGain(); this.musicGain.gain.value = 0.16;
+      this.musicGain.connect(this.master);
+    } catch (e) { this.ctx = null; }
+  },
+  unlock() {
+    this.init(); this.on = profile.sound;
+    if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+    if (this.on && !this.musicPlaying) this.startMusic();
+  },
+  tone(f, dur, type, vol, dest) {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || "square"; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol || 0.3, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest || this.master);
+    o.start(t); o.stop(t + dur + 0.03);
+  },
+  slide(f0, f1, dur, type, vol) {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime;
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type || "square";
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    g.gain.setValueAtTime(vol || 0.25, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.03);
+  },
+  noise(dur, vol, filt) {
+    if (!this.ctx || !this.on) return;
+    const t = this.ctx.currentTime, n = Math.floor(this.ctx.sampleRate * dur);
+    const buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+    const s = this.ctx.createBufferSource(); s.buffer = buf;
+    const g = this.ctx.createGain(); g.gain.value = vol || 0.3;
+    const f = this.ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = filt || 1200;
+    s.connect(f); f.connect(g); g.connect(this.master); s.start(t);
+  },
+  hit(big) { this.noise(big ? 0.17 : 0.08, big ? 0.5 : 0.32, big ? 700 : 1500);
+             if (big) this.tone(90, 0.14, "sine", 0.4); },
+  block() { this.tone(1300, 0.06, "square", 0.18); this.tone(1900, 0.05, "square", 0.1); },
+  proj() { this.tone(680, 0.08, "sawtooth", 0.15); this.slide(700, 420, 0.1, "sawtooth", 0.1); },
+  ult() { this.slide(180, 760, 0.28, "square", 0.28); this.noise(0.18, 0.3, 2200); },
+  ko() { this.noise(0.28, 0.6, 520); this.slide(320, 60, 0.45, "sawtooth", 0.3); },
+  pickup() { this.tone(880, 0.07, "square", 0.18); this.tone(1320, 0.09, "square", 0.16); },
+  menu() { this.tone(620, 0.04, "square", 0.12); },
+  win() { [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+            setTimeout(() => this.tone(f, 0.16, "square", 0.2), i * 85)); },
+  startMusic() { if (!this.ctx) return; this.musicPlaying = true;
+                 this.melodyPos = 0; this.nextNoteTime = this.ctx.currentTime + 0.1; },
+  stopMusic() { this.musicPlaying = false; },
+  updateMusic() {
+    if (!this.ctx || !this.on || !this.musicPlaying) return;
+    if (this.nextNoteTime < this.ctx.currentTime - 1) this.nextNoteTime = this.ctx.currentTime;
+    while (this.nextNoteTime < this.ctx.currentTime + 0.25) {
+      const note = this.MELODY[this.melodyPos % this.MELODY.length], beat = 0.30;
+      if (note[0] > 0) this.tone(note[0], note[1] * beat * 0.9, "square", 0.13, this.musicGain);
+      if (this.melodyPos % 4 === 0)
+        this.tone(this.BASS[((this.melodyPos / 4) | 0) % this.BASS.length],
+                  beat * 3.6, "triangle", 0.11, this.musicGain);
+      this.nextNoteTime += note[1] * beat;
+      this.melodyPos++;
+    }
+  },
+};
 game.init();
 
 /* ---------- ЦИКЛ: логика на фиксированном шаге --------------- */
@@ -3265,6 +3376,7 @@ function loop(now) {
   acc += Math.min(100, now - last);
   last = now;
   while (acc >= STEP) { game.tick(); acc -= STEP; }
+  SND.updateMusic();
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);   // HiDPI-масштаб (v0.6)
   ctx.imageSmoothingEnabled = false;
   game.draw();
