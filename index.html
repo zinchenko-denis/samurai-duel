@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.14 — проект Пети
+   SAMURAI DUEL v0.15 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -62,6 +62,15 @@ const DIFFS = [
   { name: "ЛЁГКИЙ",  react: 22, aggro: 0.35, weapon: "fist" },
   { name: "СРЕДНИЙ", react: 14, aggro: 0.55, weapon: "fist" },
   { name: "СЛОЖНЫЙ", react: 8,  aggro: 0.80, weapon: "katana" },
+];
+/* БАШНЯ: 5 боссов с растущими HP/уроном/ИИ/оружием (v0.15).
+   hero — индекс в HEROES, skin — индекс в SKIN_FX (аура босса). */
+const TOWER_STAGES = [
+  { hero: 2, name: "КИЦУНЭ",    hp: 80,  dmg: 0.85, diff: 0, skin: 0, weapon: "fist" },
+  { hero: 1, name: "РОНИН",     hp: 100, dmg: 1.0,  diff: 0, skin: 0, weapon: "katana" },
+  { hero: 3, name: "КРОКОДАЙЛ", hp: 120, dmg: 1.15, diff: 1, skin: 0, weapon: "hook" },
+  { hero: 4, name: "СЁГУН",     hp: 145, dmg: 1.30, diff: 1, skin: 4, weapon: "naginata" },
+  { hero: 5, name: "ОНИ",       hp: 185, dmg: 1.50, diff: 2, skin: 3, weapon: "hammer" },
 ];
 
 /* ---------- КОНСТАНТЫ ЭКРАНА -------------------------------- */
@@ -1403,6 +1412,7 @@ profile.matchesWon = profile.matchesWon || 0;
 profile.winStreak = profile.winStreak || 0;
 if (!profile.trophies) profile.trophies = [];
 if (profile.cups === undefined) profile.cups = 0;
+if (profile.towerBest === undefined) profile.towerBest = 0;
 function cupRank(c) {           // ранг по очкам кубков (v0.11)
   const tiers = [
     [0, "ДЕРЕВО", "#b0895a"], [10, "БРОНЗА", "#c9803a"],
@@ -1815,13 +1825,13 @@ class HumanController {
 class AIController {
   /* ИИ честный: видит только позиции и состояния, ввод игрока
      не читает. Реакция и агрессия — из выбранной сложности. */
-  constructor() { this.pad = newPad(); this.timer = 0; this.plan = 0;
-    this.blockT = 0; this.combo = []; this.lastAtk = ""; }
+  constructor(diff) { this.pad = newPad(); this.timer = 0; this.plan = 0;
+    this.blockT = 0; this.combo = []; this.lastAtk = ""; this.diff = diff; }
   update(me, opp) {
     for (const k in this.pad) this.pad[k] = false;
     if (this.blockT > 0) { this.blockT--; this.pad.block = true; return; }
     if (me.busy) return;
-    const D = DIFFS[profile.difficulty];
+    const D = DIFFS[this.diff !== undefined ? this.diff : profile.difficulty];
     const incoming = world.projectiles.some(p => p.owner !== me &&
       ((p.vx > 0) === (me.x > p.x)) && Math.abs(p.x - me.x) < 260);
     if (incoming && Math.random() < 0.5) { this.pad.jump = true; return; }
@@ -2178,6 +2188,7 @@ const game = {
   },
   newMatch(vs) {
     this.vsMode = !!vs;
+    this.tower = { on: false, stage: 0 };
     this.wins = [0, 0]; this.round = 1; this.matchPaid = false;
     this.cupDelta = undefined;
     this.arenaIdx = (profile.arena < THEMES.length) ? profile.arena
@@ -2195,6 +2206,52 @@ const game = {
     this.p2.bx = this.vsMode ? (HEROES[profile.hero2].bx || 1) : 1.02;
     this.p2.by = this.vsMode ? (HEROES[profile.hero2].by || 1) : 0.96;
     this.newRound();
+  },
+
+  startTower() { this.startTowerStage(0); },
+  startTowerStage(s) {
+    const st = TOWER_STAGES[s];
+    this.vsMode = false;
+    this.tower = { on: true, stage: s };
+    this.wins = [0, 0]; this.round = 1; this.matchPaid = true;
+    this.cupDelta = undefined;
+    this.arenaIdx = s % THEMES.length;
+    this.p1.ctrl = new HumanController([keyPad1, keyPad2, touchPad]);
+    this.p2.ctrl = new AIController(st.diff);
+    this.p1.name = HEROES[profile.hero].name;
+    this.p2.name = st.name;
+    this.p2.pal  = "p2c";
+    this.applyBossStage(s);
+    this.p1.hook = !!HEROES[profile.hero].hook;
+    this.p2.hook = !!HEROES[st.hero].hook;
+    this.p1.bx = HEROES[profile.hero].bx || 1;
+    this.p1.by = HEROES[profile.hero].by || 1;
+    this.p2.bx = HEROES[st.hero].bx || 1;
+    this.p2.by = HEROES[st.hero].by || 1;
+    this.newRound();
+    this.p2.maxHp = st.hp; this.p2.hp = st.hp; this.p2.dmgMul = st.dmg;
+    this.p2.weapon = st.weapon;
+    this.p2.fx = SKIN_FX[st.skin].fx;         // аура босса
+  },
+  applyBossStage(s) {                         // облик босса строим в палитре p2c
+    const st = TOWER_STAGES[s];
+    const h2 = profile.hero2, sk2 = profile.skin2, o2 = profile.outfit2;
+    profile.hero2 = st.hero; profile.skin2 = st.skin; profile.outfit2 = 0;
+    applyOutfit2();
+    profile.hero2 = h2; profile.skin2 = sk2; profile.outfit2 = o2;
+  },
+  resolveTower() {
+    if (this.p1.state === ST.KO) { this.tower.on = false; this.mode = "towerfail"; return; }
+    const s = this.tower.stage;
+    if (s + 1 > (profile.towerBest || 0)) profile.towerBest = s + 1;
+    profile.coins += 15; profile.power.pts += 1;
+    if (s >= TOWER_STAGES.length - 1) {
+      profile.cups += 15; profile.coins += 30; saveProfile();
+      this.tower.on = false; this.mode = "towerwin";
+    } else {
+      saveProfile();
+      this.startTowerStage(s + 1);
+    }
   },
   newRound() {
     /* очки силы (v0.7): здоровье и урон живых игроков */
@@ -2223,6 +2280,7 @@ const game = {
   menuItems() {
     return ["В БОЙ (ПРОТИВ СЕНСЕЯ)",
             "ВДВОЁМ (ДВА ИГРОКА)",
+            "БАШНЯ (5 БОССОВ)",
             "ГЕРОИ: " + HEROES[profile.hero].name + " · " + HEROES[profile.hero2].name,
             "МАГАЗИН", "ПРОКАЧКА", "КУБКИ",
             "ОДЕЖДА: " + OUTFITS[profile.outfit].name,
@@ -2255,23 +2313,24 @@ const game = {
       if (ev.type === "up")   this.menuSel = (this.menuSel + n - 1) % n;
       if (ev.type === "down") this.menuSel = (this.menuSel + 1) % n;
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 172, 30, n);
+        const hit = this.rowAt(ev.y, 168, 28, n);
         if (hit < 0) return;
         this.menuSel = hit; ev = { type: "ok" };
       }
       if (ev.type === "ok") {
         if (this.menuSel === 0) this.newMatch(false);
         else if (this.menuSel === 1) this.newMatch(true);
-        else if (this.menuSel === 2) { this.mode = "heroes"; this.heroSel = 1 + profile.hero; }
-        else if (this.menuSel === 3) { this.mode = "shop"; this.shopSel = 0; }
-        else if (this.menuSel === 4) { this.mode = "power"; this.powerSel = 0; }
-        else if (this.menuSel === 5) this.mode = "cups";
-        else if (this.menuSel === 6) { this.mode = "outfit"; this.outfitSel = profile.outfit; }
-        else if (this.menuSel === 7) {
+        else if (this.menuSel === 2) this.startTower();
+        else if (this.menuSel === 3) { this.mode = "heroes"; this.heroSel = 1 + profile.hero; }
+        else if (this.menuSel === 4) { this.mode = "shop"; this.shopSel = 0; }
+        else if (this.menuSel === 5) { this.mode = "power"; this.powerSel = 0; }
+        else if (this.menuSel === 6) this.mode = "cups";
+        else if (this.menuSel === 7) { this.mode = "outfit"; this.outfitSel = profile.outfit; }
+        else if (this.menuSel === 8) {
           this.mode = "skins"; this.skinSel = profile.skin;
           this.skinFor = this.skinFor || 0;
         }
-        else if (this.menuSel === 8) {
+        else if (this.menuSel === 9) {
           profile.difficulty = (profile.difficulty + 1) % DIFFS.length;
           saveProfile();
         } else {
@@ -2387,7 +2446,8 @@ const game = {
     } else if (this.mode === "cups") {
       if (ev.type === "ok" || ev.type === "back" || ev.type === "click")
         this.mode = "menu";
-    } else if (this.mode === "matchend") {
+    } else if (this.mode === "matchend" || this.mode === "towerwin" ||
+               this.mode === "towerfail") {
       if (ev.type === "ok" || ev.type === "click") this.mode = "menu";
     }
   },
@@ -2432,7 +2492,7 @@ const game = {
         if (dead1 && dead2) this.msg = "НИЧЬЯ";
         else if (dead2) {
           this.wins[0]++; this.msg = this.p1.name + " ПОБЕЖДАЕТ";
-          if (!this.vsMode) {
+          if (!this.vsMode && !(this.tower && this.tower.on)) {
             profile.coins += COIN_ROUND; saveProfile();
             world.floater(W / 2, 150, "+" + COIN_ROUND + " монет", "#e8c15a");
             this.gainXp(XP_ROUND);
@@ -2443,7 +2503,8 @@ const game = {
       }
     } else if (this.mode === "ko") {
       if (--this.timer <= 0) {
-        if (this.wins[0] >= WINS_NEEDED || this.wins[1] >= WINS_NEEDED) {
+        if (this.tower && this.tower.on) { this.resolveTower(); }
+        else if (this.wins[0] >= WINS_NEEDED || this.wins[1] >= WINS_NEEDED) {
           if (!this.vsMode && this.wins[0] >= WINS_NEEDED && !this.matchPaid) {
             this.matchPaid = true;
             profile.coins += COIN_MATCH;
@@ -2697,19 +2758,19 @@ const game = {
     ctx.fillRect(0, 0, W, H);
     this.banner("SAMURAI DUEL", 56, 140);
     const items = this.menuItems();
-    ctx.font = "bold 23px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "center";
     for (let i = 0; i < items.length; i++) {
       ctx.fillStyle = (i === this.menuSel) ? "#e8c15a" : "#f2ead8";
       ctx.fillText((i === this.menuSel ? "▶ " : "") + items[i] +
-                   (i === this.menuSel ? " ◀" : ""), W / 2, 172 + i * 30);
+                   (i === this.menuSel ? " ◀" : ""), W / 2, 168 + i * 28);
     }
-    this.drawStatus(462);
+    this.drawStatus(456);
     ctx.font = "14px 'Courier New', monospace";
     ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.14 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.15 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
@@ -2936,7 +2997,10 @@ const game = {
     }
 
     if (this.mode === "intro") {
-      this.banner("РАУНД " + this.round, 64, 260);
+      if (this.tower && this.tower.on) {
+        this.banner("ЭТАП " + (this.tower.stage + 1) + "/5", 60, 236);
+        this.banner("БОСС: " + TOWER_STAGES[this.tower.stage].name, 34, 288);
+      } else this.banner("РАУНД " + this.round, 64, 260);
       this.banner(THEMES[this.arenaIdx].name, 22, 300);
     }
     if (this.mode === "fight") this.banner("БОЙ!", 80, 270);
@@ -2955,6 +3019,17 @@ const game = {
       }
       if (pWin && !this.vsMode) this.banner("+" + COIN_MATCH + " монет", 22, 314);
       this.banner("ENTER — в меню", 22, 352);
+    }
+    if (this.mode === "towerwin") {
+      this.banner("БАШНЯ ПРОЙДЕНА!", 54, 220);
+      this.banner("все 5 боссов повержены", 26, 266);
+      this.banner("+15 кубков · бонус монет", 24, 302);
+      this.banner("ENTER — в меню", 22, 350);
+    }
+    if (this.mode === "towerfail") {
+      this.banner("ЭТАП " + ((this.tower ? this.tower.stage : 0) + 1) + " — ПОРАЖЕНИЕ", 42, 226);
+      this.banner("рекорд: этап " + (profile.towerBest || 0) + "/5", 26, 272);
+      this.banner("ENTER — в меню", 22, 324);
     }
     ctx.restore();
   }
