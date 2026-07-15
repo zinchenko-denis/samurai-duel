@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.18 — проект Пети
+   SAMURAI DUEL v0.19 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -880,17 +880,17 @@ const OUTFITS = [   /* костюмы Наруто (одежда, волосы �
   { name:"ЗЕЛЁНЫЙ",   a:"#3fa050", b:"#287038", c:"#70d080", p:"#2c5838" },
 ];
 /* герои (v0.7): голова-причёска + цвет волос; hook — фирменный крюк */
-const HEROES = [   /* у каждого свой цвет тела и телосложение (v0.12) */
-  { name:"НАРУТО",    head:"naruto",  hair:"#f8e040", bx:1.00, by:1.00 },
-  { name:"РОНИН",     head:"ronin",   hair:"#2c2836", bx:0.97, by:1.03 },
-  { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a", bx:0.90, by:1.00,
+const HEROES = [   /* тело, телосложение (v0.12) + атрибут за спиной (v0.19) */
+  { name:"НАРУТО",    head:"naruto",  hair:"#f8e040", bx:1.00, by:1.00, acc:"scarf" },
+  { name:"РОНИН",     head:"ronin",   hair:"#2c2836", bx:0.97, by:1.03, acc:"sash" },
+  { name:"КИЦУНЭ",    head:"kitsune", hair:"#e8833a", bx:0.90, by:1.00, acc:"foxtail",
     body:{ s:"#f0d2b2", d:"#d2ac86" } },
-  { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true, bx:1.10, by:1.00,
+  { name:"КРОКОДАЙЛ", head:"plain",   hair:"#232030", hook:true, bx:1.10, by:1.00, acc:"croctail",
     body:{ s:"#5aa050", d:"#3a7038" } },
-  { name:"СЁГУН",     head:"shogun",  hair:"#232030", bx:1.12, by:1.05 },
-  { name:"ОНИ",       head:"oni",     hair:"#b8302c", bx:1.16, by:1.08,
+  { name:"СЁГУН",     head:"shogun",  hair:"#232030", bx:1.12, by:1.05, acc:"banner" },
+  { name:"ОНИ",       head:"oni",     hair:"#b8302c", bx:1.16, by:1.08, acc:"club",
     body:{ s:"#d0463a", d:"#a02c28" } },
-  { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4", bx:1.18, by:0.98,
+  { name:"ПАНДА",     head:"panda",   hair:"#f0f0f4", bx:1.18, by:0.98, acc:"bamboo",
     body:{ s:"#e8e8ee", d:"#c0c0cc" } },
 ];
 const PAL = {
@@ -1565,7 +1565,7 @@ class Fighter {
     this.weapon = "fist"; this.hook = false;
     this.maxHp = HP_MAX; this.dmgMul = 1; this.bx = 1; this.by = 1;
     this.superMeter = 0; this.combo = 0; this.comboTimer = 0;
-    this.heroId = 0; this._ultDone = false;
+    this.heroId = 0; this._ultDone = false; this.acc = null;
     this.reset(x, 1);
   }
   reset(x, facing) {
@@ -1859,6 +1859,74 @@ class Fighter {
       }
     }
   }
+  drawAccessory() {                  // атрибут героя за спиной (v0.19)
+    const acc = this.acc; if (!acc) return;
+    const t = this.t, f = this.facing, x = this.x, gy = GROUND + this.yOff;
+    const sway = Math.sin(t * 0.12) * 4 - this.vx * f * 1.4;
+    ctx.save(); ctx.lineJoin = "round"; ctx.lineCap = "round";
+    if (acc === "foxtail") {
+      const bx = x - f * 13, by = gy - 46;
+      ctx.strokeStyle = "#e8833a"; ctx.lineWidth = 11;
+      ctx.beginPath(); ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx - f * 20, by - 4 + sway, bx - f * 30, by - 30 + sway);
+      ctx.stroke();
+      ctx.strokeStyle = "#f6efe6"; ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(bx - f * 27, by - 24 + sway);
+      ctx.lineTo(bx - f * 31, by - 34 + sway); ctx.stroke();
+    } else if (acc === "croctail") {
+      const bx = x - f * 11, by = gy - 22;
+      ctx.fillStyle = "#5aa050"; ctx.strokeStyle = "#3a7038"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(bx, by - 15);
+      ctx.quadraticCurveTo(bx - f * 32, by - 8 + sway, bx - f * 52, by + 8 + sway);
+      ctx.quadraticCurveTo(bx - f * 30, by + 2, bx, by);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = "#3a7038";
+      for (let i = 1; i <= 4; i++) ctx.fillRect(bx - f * i * 10 - 1, by - 13 - i, 4, 5);
+    } else if (acc === "banner") {
+      const px = x - f * 17, top = gy - 120, wv = Math.sin(t * 0.15) * 5;
+      ctx.strokeStyle = "#6a4a2a"; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(px, top - 8); ctx.lineTo(px, gy - 40); ctx.stroke();
+      ctx.fillStyle = "#c0392b";
+      ctx.beginPath(); ctx.moveTo(px, top); ctx.lineTo(px - f * 32, top + 5 + wv);
+      ctx.lineTo(px - f * 32, top + 46 + wv); ctx.lineTo(px, top + 44); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ffd23a";
+      ctx.beginPath(); ctx.arc(px - f * 16, top + 24 + wv * 0.6, 6, 0, 7); ctx.fill();
+    } else if (acc === "scarf") {
+      const bx = x - f * 7, by = gy - 90;
+      ctx.strokeStyle = "#d23a3a"; ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx - f * 22, by + 6 + sway, bx - f * 34, by + 24 + sway * 1.4);
+      ctx.stroke();
+    } else if (acc === "sash") {
+      const bx = x - f * 9, by = gy - 54;
+      ctx.strokeStyle = "#3a5a8c"; ctx.lineWidth = 7;
+      ctx.beginPath(); ctx.moveTo(bx, by);
+      ctx.quadraticCurveTo(bx - f * 8, by + 22, bx - f * 4 + sway, by + 42); ctx.stroke();
+    } else if (acc === "club") {
+      const bx = x - f * 16, by = gy - 32;
+      ctx.strokeStyle = "#6a4a2a"; ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - f * 18, by - 66); ctx.stroke();
+      ctx.fillStyle = "#5a4636";
+      ctx.beginPath(); ctx.arc(bx - f * 20, by - 74, 13, 0, 7); ctx.fill();
+      ctx.fillStyle = "#2b2733";
+      for (let i = 0; i < 6; i++) {
+        const a = i * 1.05;
+        ctx.fillRect(bx - f * 20 + Math.cos(a) * 13 - 1, by - 74 + Math.sin(a) * 13 - 1, 4, 4);
+      }
+    } else if (acc === "bamboo") {
+      const bx = x - f * 15, by = gy - 34;
+      ctx.strokeStyle = "#6aa84a"; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx - f * 8, by - 76); ctx.stroke();
+      ctx.strokeStyle = "#3f7030"; ctx.lineWidth = 6;
+      for (let i = 0; i < 3; i++) {
+        const yy = by - 18 - i * 24, xx = bx - f * (2 + i * 2.6);
+        ctx.beginPath(); ctx.moveTo(xx - 3, yy); ctx.lineTo(xx + 3, yy); ctx.stroke();
+      }
+      ctx.fillStyle = "#7ec850";
+      ctx.beginPath(); ctx.ellipse(bx - f * 12, by - 72, 9, 3, f * 0.5, 0, 7); ctx.fill();
+    }
+    ctx.restore();
+  }
   draw() {
     // мигание при неуязвимости после подъёма
     if (this.invuln > 0 && Math.floor(this.t / 3) % 2 === 0 &&
@@ -1872,6 +1940,7 @@ class Fighter {
     ctx.beginPath();
     ctx.ellipse(this.x, GROUND + 6, 34 * sk, 8 * sk, 0, 0, 7);
     ctx.fill();
+    this.drawAccessory();            // атрибут героя за спиной (v0.19)
     this.drawAura(false);            // свечение скина за спиной
     // спрайт с якорем и отражением
     ctx.save();
@@ -2319,6 +2388,8 @@ const game = {
     this.p2.by = this.vsMode ? (HEROES[profile.hero2].by || 1) : 0.96;
     this.p1.heroId = profile.hero;
     this.p2.heroId = this.vsMode ? profile.hero2 : 0;
+    this.p1.acc = HEROES[profile.hero].acc;
+    this.p2.acc = this.vsMode ? HEROES[profile.hero2].acc : null;
     this.newRound();
   },
 
@@ -2354,6 +2425,8 @@ const game = {
     this.p2.by = HEROES[st.hero].by || 1;
     this.p1.heroId = profile.hero;
     this.p2.heroId = st.hero;
+    this.p1.acc = HEROES[profile.hero].acc;
+    this.p2.acc = HEROES[st.hero].acc;
     this.newRound();
     this.p2.maxHp = st.hp; this.p2.hp = st.hp; this.p2.dmgMul = st.dmg;
     this.p2.weapon = st.weapon;
@@ -2913,7 +2986,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.18 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.19 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
