@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.15 — проект Пети
+   SAMURAI DUEL v0.16 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1391,6 +1391,7 @@ const PROJ = {
   arrow:    { dmg: WEAPONS.bow.dmg, kb: 5, stun: 16, speed: 11, size: 14 },
   kunai:    { dmg: WEAPONS.kunai.dmg, kb: 4, stun: 14, speed: 13, size: 12 },
   fireball: { dmg: WEAPONS.fireball.dmg, kb: 6, stun: 18, speed: 8, size: 22 },
+  beam:     { dmg: 28, kb: 13, stun: 26, speed: 13, size: 34 },
 };
 
 /* ---------- СОХРАНЕНИЕ (монеты и купленное) ------------------
@@ -1477,6 +1478,17 @@ const ST = { IDLE:"idle", WALK:"walk", JUMP:"jump", KICK:"kick", SWEEP:"sweep",
 const SUPER_MAX = 100;                  // порог заполнения шкалы супера
 const SUPER_ATK = { startup: 7, active: 10, recover: 26, dmg: 34, kb: 16,
                     stun: 34, knockdown: true, box: { fx: 12, fy: 40, w: 122, h: 62 } };
+/* УЛЬТЫ: у каждого героя свой супер (v0.16). kind:"melee" (многоудар/рывок)
+   или "beam" (снаряд-волна). Индексы совпадают с HEROES. */
+const HERO_ULTS = [
+  { name:"ВИХРЬ ЧАКРЫ",    kind:"melee", dmg:11, hits:4, kb:6,  stun:20, knockdown:false, dash:3.0, col:"#5ad0ff", box:{fx:6, fy:34, w:88,  h:74} },
+  { name:"КЛИНОК БУРИ",    kind:"beam",  dmg:28,          kb:13, stun:26, knockdown:false,           col:"#cfd8ff" },
+  { name:"ЛИСИЙ РЫВОК",    kind:"melee", dmg:10, hits:4, kb:5,  stun:16, knockdown:false, dash:6.0, col:"#ffb060", box:{fx:8, fy:38, w:94,  h:60} },
+  { name:"ЖЕЛЕЗНАЯ ХВАТКА",kind:"melee", dmg:34, hits:1, kb:15, stun:30, knockdown:true,  dash:4.5, col:"#5aa050", box:{fx:10,fy:36, w:98,  h:64} },
+  { name:"УДАР СЁГУНА",    kind:"melee", dmg:32, hits:1, kb:16, stun:30, knockdown:true,  dash:1.0, col:"#ffd23a", box:{fx:0, fy:20, w:152, h:82} },
+  { name:"ОГНЕННЫЙ ТАРАН", kind:"melee", dmg:38, hits:1, kb:22, stun:30, knockdown:true,  dash:7.0, col:"#ff6a28", box:{fx:8, fy:34, w:100, h:70} },
+  { name:"КАТЯЩИЙ УДАР",   kind:"melee", dmg:11, hits:3, kb:7,  stun:18, knockdown:false, dash:6.0, col:"#f0f0f4", box:{fx:6, fy:20, w:96,  h:78} },
+];
 
 class Fighter {
   constructor(x, palName, name, ctrl) {
@@ -1484,6 +1496,7 @@ class Fighter {
     this.weapon = "fist"; this.hook = false;
     this.maxHp = HP_MAX; this.dmgMul = 1; this.bx = 1; this.by = 1;
     this.superMeter = 0; this.combo = 0; this.comboTimer = 0;
+    this.heroId = 0; this._ultDone = false;
     this.reset(x, 1);
   }
   reset(x, facing) {
@@ -1534,9 +1547,11 @@ class Fighter {
         }
         if (pad.block) { this.setState(ST.BLOCK); break; }
         if (pad.super && this.superMeter >= SUPER_MAX) {
-          this.superMeter = 0; this.setState(ST.SUPER);
+          this.superMeter = 0; this.setState(ST.SUPER); this._ultDone = false;
+          const ult = HERO_ULTS[this.heroId] || HERO_ULTS[0];
           game.hitStop = 8; game.flash = 0.5;
-          world.impact(this.x + this.facing * 44, GROUND - 72, true);
+          world.impact(this.x + this.facing * 44, GROUND - 72, true, ult.col);
+          world.floater(this.x, GROUND - 168, ult.name + "!", ult.col, true);
           break;
         }
         if (pad.jab)   { this.setState(ST.JAB);   break; }
@@ -1565,11 +1580,16 @@ class Fighter {
         break;
       }
       case ST.SUPER: {
-        this.vx = this.facing * 2.4;                 // рывок вперёд
-        const tot = SUPER_ATK.startup + SUPER_ATK.active + SUPER_ATK.recover;
-        if (this.t > SUPER_ATK.startup &&
-            this.t <= SUPER_ATK.startup + SUPER_ATK.active && !this.hitLanded) {
-          world.tryHit(this, opp, SUPER_ATK);
+        const ult = HERO_ULTS[this.heroId] || HERO_ULTS[0];
+        const hits = ult.hits || 1;
+        const active = hits > 1 ? 6 * hits : 10;
+        const tot = 8 + active + 26;
+        this.vx = this.facing * (ult.dash || 2);
+        if (ult.kind === "beam") {
+          if (this.t === 9 && !this._ultDone) { this._ultDone = true; world.spawnBeam(this); }
+        } else if (this.t > 8 && this.t <= 8 + active) {
+          if (!this.hitLanded) world.tryHit(this, opp, ult);
+          if (hits > 1 && this.t % 6 === 0) this.hitLanded = false;   // многоудар
         }
         if (this.t >= tot) this.setState(ST.IDLE);
         break;
@@ -1682,8 +1702,11 @@ class Fighter {
         return (this.t > ATK.jab.startup) ? "throwA" : "idle";
       case ST.HEAVY:
         return (this.t > ATK.heavy.startup) ? "punchB" : "idle";
-      case ST.SUPER:
-        return (this.t > SUPER_ATK.startup) ? "punchB" : "blockA";
+      case ST.SUPER: {
+        const u = HERO_ULTS[this.heroId] || HERO_ULTS[0];
+        if (u.kind === "beam") return (this.t > 8) ? "throwA" : "blockA";
+        return (this.t > 8) ? "punchB" : "blockA";
+      }
       case ST.WEAPON: {
         const wp = WEAPONS[this.weapon];
         const strike = (wp.type === "melee")
@@ -2002,12 +2025,16 @@ const world = {
     }
   },
   spark(x, y) { this.sparks.push({ x: x, y: y, t: 0 }); },
-  impact(x, y, big) {                    // вспышка-кольцо + искры (v0.13)
-    this.rings.push({ x: x, y: y, t: 0, max: big ? 46 : 30 });
+  impact(x, y, big, col) {               // вспышка-кольцо + искры (цвет v0.16)
+    this.rings.push({ x: x, y: y, t: 0, max: big ? 46 : 30, col: col || "#fff0b4" });
     const n = big ? 12 : 7;
     for (let i = 0; i < n; i++)
       this.sparks.push({ x: x + (Math.random() - 0.5) * 22,
                          y: y + (Math.random() - 0.5) * 22, t: 0 });
+  },
+  spawnBeam(f) {                          // энергетическая волна (ульта, v0.16)
+    this.projectiles.push({ kind: "beam", x: f.x + f.facing * 40, y: GROUND - 74,
+                            vx: f.facing * PROJ.beam.speed, t: 0, alive: true, owner: f });
   },
 
   update() {
@@ -2145,6 +2172,15 @@ const world = {
         ctx.beginPath(); ctx.arc(pj.x, pj.y, fr, 0, 7); ctx.fill();
         ctx.fillStyle = "#ffd24a";
         ctx.beginPath(); ctx.arc(pj.x - pj.vx * 0.3, pj.y, fr * 0.5, 0, 7); ctx.fill();
+      } else if (pj.kind === "beam") {
+        ctx.save(); ctx.translate(pj.x, pj.y); if (pj.vx < 0) ctx.scale(-1, 1);
+        ctx.fillStyle = "rgba(200,216,255,0.28)";
+        ctx.beginPath(); ctx.ellipse(0, 0, 28, 18, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = "#cfd8ff";
+        ctx.beginPath(); ctx.ellipse(0, 0, 19, 12, 0, 0, 7); ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath(); ctx.ellipse(-5, 0, 9, 7, 0, 0, 7); ctx.fill();
+        ctx.restore();
       } else {
         ctx.save();
         ctx.translate(pj.x, pj.y);
@@ -2156,9 +2192,11 @@ const world = {
     }
     for (const rg of this.rings) {
       const p = rg.t / 14, rad = rg.max * p;
-      ctx.strokeStyle = "rgba(255,240,180," + (1 - p).toFixed(2) + ")";
+      ctx.globalAlpha = 1 - p;
+      ctx.strokeStyle = rg.col || "#fff0b4";
       ctx.lineWidth = 3 * (1 - p) + 1;
       ctx.beginPath(); ctx.arc(rg.x, rg.y, rad, 0, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
     }
     for (const sp of this.sparks) {
       const r = 4 + sp.t * 2.2;
@@ -2205,6 +2243,8 @@ const game = {
     this.p1.by = HEROES[profile.hero].by || 1;
     this.p2.bx = this.vsMode ? (HEROES[profile.hero2].bx || 1) : 1.02;
     this.p2.by = this.vsMode ? (HEROES[profile.hero2].by || 1) : 0.96;
+    this.p1.heroId = profile.hero;
+    this.p2.heroId = this.vsMode ? profile.hero2 : 0;
     this.newRound();
   },
 
@@ -2228,6 +2268,8 @@ const game = {
     this.p1.by = HEROES[profile.hero].by || 1;
     this.p2.bx = HEROES[st.hero].bx || 1;
     this.p2.by = HEROES[st.hero].by || 1;
+    this.p1.heroId = profile.hero;
+    this.p2.heroId = st.hero;
     this.newRound();
     this.p2.maxHp = st.hp; this.p2.hp = st.hp; this.p2.dmgMul = st.dmg;
     this.p2.weapon = st.weapon;
@@ -2770,7 +2812,7 @@ const game = {
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.15 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.16 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
