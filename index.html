@@ -21,7 +21,7 @@
 <script>
 "use strict";
 /* ============================================================
-   SAMURAI DUEL v0.19 — проект Пети
+   SAMURAI DUEL v0.20 — проект Пети
    Один файл: спрайты, движок, бой, ИИ, HUD.
    ============================================================ */
 
@@ -1483,6 +1483,7 @@ if (profile.cups === undefined) profile.cups = 0;
 if (profile.towerBest === undefined) profile.towerBest = 0;
 if (profile.endlessBest === undefined) profile.endlessBest = 0;
 if (!profile.challenges) profile.challenges = {};
+if (profile.lowGrav === undefined) profile.lowGrav = false;
 function cupRank(c) {           // ранг по очкам кубков (v0.11)
   const tiers = [
     [0, "ДЕРЕВО", "#b0895a"], [10, "БРОНЗА", "#c9803a"],
@@ -1610,7 +1611,7 @@ class Fighter {
         this.vx = dir * 3.2;
         this.setStateKeep(dir !== 0 ? ST.WALK : ST.IDLE);
         if (pad.jump) {
-          this.setState(ST.JUMP); this.vy = -13;
+          this.setState(ST.JUMP); this.vy = profile.lowGrav ? -9 : -13;
           this.vx = (pad.left ? -1 : pad.right ? 1 : 0) * 3.2;
           break;
         }
@@ -1722,8 +1723,8 @@ class Fighter {
       }
     }
 
-    if (this.yOff < 0 || this.vy !== 0) {   // гравитация
-      this.vy += 0.7; this.yOff += this.vy;
+    if (this.yOff < 0 || this.vy !== 0) {   // гравитация (низкая при невесомости)
+      this.vy += (profile.lowGrav ? 0.2 : 0.7); this.yOff += this.vy;
       if (this.yOff >= 0) {
         this.yOff = 0; this.vy = 0;
         if (this.state === ST.JUMP) this.setState(ST.IDLE);
@@ -1752,7 +1753,7 @@ class Fighter {
     this.vx = dir * a.kb;
     if (this.hp <= 0) { this.setState(ST.KO); return true; }
     if (a.knockdown) { this.setState(ST.DOWN); }
-    else { this.setState(ST.HIT); this.stunLeft = a.stun; }
+    else { this.setState(ST.HIT); this.stunLeft = a.stun; if (profile.lowGrav) this.vy = -5; }
     return true;
   }
 
@@ -2501,7 +2502,8 @@ const game = {
             "СКИНЫ: " + SKIN_FX[profile.skin].name,
             "СЛОЖНОСТЬ: " + DIFFS[profile.difficulty].name,
             "КАРТА: " + (profile.arena < THEMES.length
-                         ? THEMES[profile.arena].name : "СЛУЧАЙНАЯ")];
+                         ? THEMES[profile.arena].name : "СЛУЧАЙНАЯ"),
+            "НЕВЕСОМОСТЬ: " + (profile.lowGrav ? "ВКЛ" : "ВЫКЛ")];
   },
 
   isNight() {
@@ -2527,7 +2529,7 @@ const game = {
       if (ev.type === "up")   this.menuSel = (this.menuSel + n - 1) % n;
       if (ev.type === "down") this.menuSel = (this.menuSel + 1) % n;
       if (ev.type === "click") {
-        const hit = this.rowAt(ev.y, 168, 28, n);
+        const hit = this.rowAt(ev.y, 162, 27, n);
         if (hit < 0) return;
         this.menuSel = hit; ev = { type: "ok" };
       }
@@ -2547,9 +2549,12 @@ const game = {
         else if (this.menuSel === 9) {
           profile.difficulty = (profile.difficulty + 1) % DIFFS.length;
           saveProfile();
-        } else {
+        } else if (this.menuSel === 10) {
           profile.arena = (profile.arena + 1) % (THEMES.length + 1);
           this.arenaIdx = (profile.arena < THEMES.length) ? profile.arena : 0;
+          saveProfile();
+        } else {
+          profile.lowGrav = !profile.lowGrav;
           saveProfile();
         }
       }
@@ -2974,19 +2979,19 @@ const game = {
     ctx.fillRect(0, 0, W, H);
     this.banner("SAMURAI DUEL", 56, 140);
     const items = this.menuItems();
-    ctx.font = "bold 22px 'Courier New', monospace"; ctx.textAlign = "center";
+    ctx.font = "bold 21px 'Courier New', monospace"; ctx.textAlign = "center";
     for (let i = 0; i < items.length; i++) {
       ctx.fillStyle = (i === this.menuSel) ? "#e8c15a" : "#f2ead8";
       ctx.fillText((i === this.menuSel ? "▶ " : "") + items[i] +
-                   (i === this.menuSel ? " ◀" : ""), W / 2, 168 + i * 28);
+                   (i === this.menuSel ? " ◀" : ""), W / 2, 162 + i * 27);
     }
-    this.drawStatus(456);
+    this.drawStatus(466);
     ctx.font = "14px 'Courier New', monospace";
     ctx.fillStyle = "#aab0d0"; ctx.textAlign = "center";
     ctx.fillText("1-й (слева): A D шаг · W прыжок · S блок · F G H R T Y — атаки", W / 2, 500);
     ctx.fillText("2-й (справа): ←→ шаг · ↑ прыжок · ↓ блок · J K L U I O — атаки", W / 2, 518);
     ctx.textAlign = "right";
-    ctx.fillText("v0.19 · игра Пети", W - 16, H - 6);
+    ctx.fillText("v0.20 · игра Пети", W - 16, H - 6);
     world.drawFloaters();
   },
 
